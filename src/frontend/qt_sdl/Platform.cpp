@@ -34,6 +34,7 @@
 
 #include "Platform.h"
 #include "Config.h"
+#include "WiiDSBridge.h"
 #include "EmuInstance.h"
 #include "main.h"
 #include "CameraManager.h"
@@ -474,54 +475,87 @@ void WriteDateTime(int year, int month, int day, int hour, int minute, int secon
 
 void MP_Begin(void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata) && !WiiDSBridge::IsAutomatic(userdata)) return;
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     MPInterface::Get().Begin(inst);
 }
 
 void MP_End(void* userdata)
 {
+    if (WiiDSBridge::IsAutomatic(userdata))
+        WiiDSBridge::ResetRadio(userdata);
+    else if (WiiDSBridge::IsEnabled(userdata))
+    { WiiDSBridge::ResetRadio(userdata); return; }
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     MPInterface::Get().End(inst);
 }
 
 int MP_SendPacket(u8* data, int len, u64 timestamp, void* userdata)
 {
+    if (WiiDSBridge::SelectForTransmit(userdata, data, len)) return WiiDSBridge::Send(userdata, data, len);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().SendPacket(inst, data, len, timestamp);
 }
 
 int MP_RecvPacket(u8* data, u64* timestamp, void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata)) return WiiDSBridge::Receive(userdata, data, timestamp, false);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
+    if (WiiDSBridge::IsAutomatic(userdata))
+    {
+        // Each emulation thread belongs to one instance. Alternate the first
+        // receiver so neither Wii discovery nor a busy DS parent can starve
+        // the other before the guest selects its actual parent.
+        static thread_local bool wiiFirst = false;
+        wiiFirst = !wiiFirst;
+        int received;
+        if (wiiFirst)
+        {
+            received = WiiDSBridge::Receive(userdata, data, timestamp, false);
+            if (received > 0) return received;
+            return MPInterface::Get().RecvPacket(inst, data, timestamp);
+        }
+        received = MPInterface::Get().RecvPacket(inst, data, timestamp);
+        if (received > 0) return received;
+        return WiiDSBridge::Receive(userdata, data, timestamp, false);
+    }
     return MPInterface::Get().RecvPacket(inst, data, timestamp);
 }
 
 int MP_SendCmd(u8* data, int len, u64 timestamp, void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata)) return WiiDSBridge::Send(userdata, data, len);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().SendCmd(inst, data, len, timestamp);
 }
 
 int MP_SendReply(u8* data, int len, u64 timestamp, u16 aid, void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata)) return WiiDSBridge::Send(userdata, data, len);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().SendReply(inst, data, len, timestamp, aid);
 }
 
 int MP_SendAck(u8* data, int len, u64 timestamp, void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata)) return WiiDSBridge::Send(userdata, data, len);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().SendAck(inst, data, len, timestamp);
 }
 
 int MP_RecvHostPacket(u8* data, u64* timestamp, void* userdata)
 {
+    // The core clears its MP-client flags on -1. Otherwise a disconnected
+    // Wii client would enter LocalMP's timed wait on every radio timer tick.
+    if (WiiDSBridge::ConsumeHostDisconnect(userdata)) return -1;
+    if (WiiDSBridge::IsEnabled(userdata)) return WiiDSBridge::Receive(userdata, data, timestamp, true);
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().RecvHostPacket(inst, data, timestamp);
 }
 
 u16 MP_RecvReplies(u8* data, u64 timestamp, u16 aidmask, void* userdata)
 {
+    if (WiiDSBridge::IsEnabled(userdata)) return 0; // Wii is the radio parent.
     int inst = ((EmuInstance*)userdata)->getInstanceID();
     return MPInterface::Get().RecvReplies(inst, data, timestamp, aidmask);
 }

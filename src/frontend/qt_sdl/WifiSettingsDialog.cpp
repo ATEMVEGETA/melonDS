@@ -53,6 +53,15 @@ WifiSettingsDialog::WifiSettingsDialog(QWidget* parent) : QDialog(parent), ui(ne
 
     emuInstance = ((MainWindow*)parent)->getEmuInstance();
     auto& cfg = emuInstance->getGlobalConfig();
+    auto& localCfg = emuInstance->getLocalConfig();
+    const auto launchOverride = emuInstance->getWiiDSLaunchOverride();
+    ui->chkWiiDS->setChecked(launchOverride.value_or(localCfg.GetBool("WiiDS.Automatic")));
+    // The guest radio must be stopped before changing transport ownership.
+    // Do not reset an unsaved game merely to change this preference.
+    ui->chkWiiDS->setEnabled(!emuInstance->getEmuThread()->emuIsActive() && !launchOverride.has_value());
+    if (launchOverride.has_value())
+        ui->chkWiiDS->setToolTip("A command-line Wii-DS option controls this launch. Restart without the override to change the saved option.");
+    ui->chkWiiDSDiagnostics->setChecked(localCfg.GetBool("WiiDS.Diagnostics"));
 
     if (!pcap)
         pcap = melonDS::LibPCap::New();
@@ -120,6 +129,14 @@ void WifiSettingsDialog::done(int r)
             cfg.SetString("LAN.Device", adapters[sel].DeviceName);
         }
 
+        auto& localCfg = emuInstance->getLocalConfig();
+        if (ui->chkWiiDS->isEnabled())
+        {
+            localCfg.SetBool("WiiDS.Automatic", ui->chkWiiDS->isChecked());
+            localCfg.SetBool("WiiDS.Enabled", false);
+        }
+        localCfg.SetBool("WiiDS.Diagnostics", ui->chkWiiDSDiagnostics->isChecked());
+        emuInstance->applyWiiDSSettings();
         Config::Save();
     }
 

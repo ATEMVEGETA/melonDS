@@ -357,6 +357,7 @@ int main(int argc, char** argv)
     NetInit();
 
     createEmuInstance();
+    emuInstances[0]->setWiiDSLaunchOverride(options->wiiDS);
 
     {
         MainWindow* win = emuInstances[0]->getMainWindow();

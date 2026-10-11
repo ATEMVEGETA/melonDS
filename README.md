@@ -1,3 +1,16 @@
+> [!IMPORTANT]
+> This branch is the **unofficial melonDS Wii–DS Link fork**. It adds
+> **Config → Wi-Fi settings → Connect to Dolphin** and is intended for use with
+> the matching [Dolphin Wii–DS Link fork](https://github.com/ATEMVEGETA/dolphin).
+> Downloads, setup instructions, compatibility notes, and matching version
+> links are maintained at [Wii-DS-Link](https://github.com/ATEMVEGETA/Wii-DS-Link).
+> It has been tested so far with **My Pokémon Ranch** and
+> **Pokémon Battle Revolution**.
+> This work is not affiliated with or endorsed by the upstream melonDS project.
+
+See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
+build information. Games, BIOS, firmware, and saves are not included.
+
 <p align="center"><img src="https://raw.githubusercontent.com/melonDS-emu/melonDS/master/res/icon/melon_128x128.png"></p>
 <h2 align="center"><b>melonDS</b></h2>
 <p align="center">

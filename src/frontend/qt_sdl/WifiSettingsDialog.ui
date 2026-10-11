@@ -24,6 +24,20 @@
     <enum>QLayout::SetFixedSize</enum>
    </property>
    <item>
+    <widget class="QGroupBox" name="groupWiiDS">
+     <property name="title"><string>Dolphin Wii connection (local radio)</string></property>
+     <layout class="QVBoxLayout" name="wiiDSLayout">
+      <item><widget class="QCheckBox" name="chkWiiDS">
+       <property name="text"><string>Connect to Dolphin</string></property>
+       <property name="toolTip"><string>Automatically discover Dolphin on this computer. Normal DS-DS wireless remains available until the game chooses the Wii. Stop the game before changing this option. Only one instance can use the Wii link.</string></property>
+      </widget></item>
+      <item><widget class="QCheckBox" name="chkWiiDSDiagnostics">
+       <property name="text"><string>Write optional Wii-DS diagnostic log</string></property>
+      </widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="label_4">
      <property name="styleSheet">
       <string notr="true">QLabel {
@@ -31,7 +45,7 @@
 }</string>
      </property>
      <property name="text">
-      <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;These settings control how melonDS connects to the internet for online features (typically called &amp;quot;Nintendo Wi-Fi Connection&amp;quot;) in games. &lt;/p&gt;&lt;p&gt;Local multiplayer features do not use the same network protocols as online play, so the settings here will have no effect on them.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+      <string>Online network settings below are separate from local DS-DS wireless and the Dolphin Wii connection above.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>

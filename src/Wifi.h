@@ -18,6 +18,7 @@
 
 #ifndef WIFI_H
 #define WIFI_H
+#include "WiiDSNativeMPRound.h"
 
 #include "Savestate.h"
 
@@ -248,6 +249,9 @@ private:
     bool IsMPClient;
     u64 NextSync;           // for clients: timestamp for next sync point
     u64 RXTimestamp;
+    WiiDSNativeMPRound WiiDSRound;
+    u64 WiiDSGeneration = 0;
+    bool WiiDSMPStarted = false;
 
     class WifiAP* WifiAP;
 

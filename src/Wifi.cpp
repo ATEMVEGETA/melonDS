@@ -21,6 +21,7 @@
 #include "NDS.h"
 #include "SPI.h"
 #include "Wifi.h"
+#include "net/WiiDSBridge.h"
 #include "WifiAP.h"
 #include "Platform.h"
 
@@ -105,6 +106,10 @@ Wifi::~Wifi()
 
 void Wifi::Reset()
 {
+    WiiDSRound.Reset();
+    WiiDSMPStarted = false;
+    WiiDSBridge::ResetRadio(NDS.UserData);
+    WiiDSGeneration = WiiDSBridge::Generation(NDS.UserData);
     memset(RAM, 0, 0x2000);
     memset(IO, 0, 0x1000);
 
@@ -313,6 +318,12 @@ void Wifi::DoSavestate(Savestate* file)
     file->Bool32(&IsMPClient);
     file->Var64(&NextSync);
     file->Var64(&RXTimestamp);
+    if (!file->Saving && WiiDSBridge::IsDiscoverable(NDS.UserData))
+    {
+        WiiDSRound.Reset(); WiiDSMPStarted = false;
+        WiiDSBridge::ResetRadio(NDS.UserData);
+        WiiDSGeneration = WiiDSBridge::Generation(NDS.UserData);
+    }
 }
 
 
@@ -639,6 +650,14 @@ void Wifi::TXSendFrame(const TXSlot* slot, int num)
 
     memcpy(TXBuffer, &RAM[slot->Addr], 12+len);
 
+    // Discovery alone does not replace the normal DS radio. Only a guest
+    // authentication/association directed to the discovered Wii selects it.
+    WiiDSBridge::SelectForTransmit(NDS.UserData, TXBuffer, 12+len);
+
+    if (WiiDSBridge::IsEnabled(NDS.UserData) && len >= 24 &&
+        ((TXBuffer[12] & 0xfc) == 0xc0 || (TXBuffer[12] & 0xfc) == 0xa0))
+        WiiDSRound.Reset();
+
     if (noseqno == 2)
         *(u16*)&TXBuffer[0xC] |= (1<<11);
 
@@ -796,6 +815,7 @@ void Wifi::FireTX()
 void Wifi::SendMPDefaultReply()
 {
     u8 reply[12 + 28];
+    if (WiiDSBridge::IsEnabled(NDS.UserData)) memset(reply, 0, sizeof(reply));
 
     *(u16*)&reply[0xA] = 28; // length
 
@@ -810,6 +830,11 @@ void Wifi::SendMPDefaultReply()
 
     *(u16*)&reply[0xC + 0x00] = 0x0158;
     *(u16*)&reply[0xC + 0x02] = 0x00F0;//0; // TODO??
+    if (WiiDSBridge::IsEnabled(NDS.UserData))
+    {
+        *(u16*)&reply[0xC + 0x00] = 0x1158;
+        *(u16*)&reply[0xC + 0x02] = 0x00ea;
+    }
     *(u16*)&reply[0xC + 0x04] = IOPORT(W_BSSID0);
     *(u16*)&reply[0xC + 0x06] = IOPORT(W_BSSID1);
     *(u16*)&reply[0xC + 0x08] = IOPORT(W_BSSID2);
@@ -1475,6 +1500,20 @@ void Wifi::FinishRX()
         if (addr & 0x2) IncrementRXAddr(addr);
         IOPORT(W_RXBufWriteCursor) = (addr & ~0x3) >> 1;
 
+        if (WiiDSBridge::IsEnabled(NDS.UserData) && WiiDSBridge::IsActive(NDS.UserData))
+        {
+            const auto parent = WiiDSBridge::ParentBSSID();
+            if (MACEqual(&RXBuffer[12 + 10], parent.data()) && MACEqual(&RXBuffer[12 + 16], parent.data()))
+            {
+                if ((framectl & 0x00fc) == 0x00c0 || (framectl & 0x00fc) == 0x00a0)
+                    WiiDSRound.Reset();
+                else if ((rxflags & 0x800f) == 0x800c && MACEqual(&RXBuffer[12 + 4], MPCmdMAC))
+                    WiiDSRound.CommandCommitted();
+                else if ((rxflags & 0x800f) == 0x800d && MACEqual(&RXBuffer[12 + 4], MPAckMAC))
+                    WiiDSRound.AckCommitted(IOPORT(W_RXBufWriteCursor));
+            }
+        }
+
         SetIRQ(0);
     }
 
@@ -1557,6 +1596,29 @@ void Wifi::MPClientReplyRX(int client)
 
 bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
 {
+    if (WiiDSBridge::IsDiscoverable(NDS.UserData))
+    {
+        const auto generation = WiiDSBridge::Generation(NDS.UserData);
+        if (generation != WiiDSGeneration)
+        {
+            WiiDSGeneration = generation;
+            WiiDSRound.Reset();
+            WiiDSMPStarted = false;
+        }
+        if (type == 2 && WiiDSBridge::IsEnabled(NDS.UserData))
+        {
+            WiiDSBridge::SetCommandAllowed(NDS.UserData,
+                WiiDSRound.CanReceiveCommand((IOPORT(W_TXBusy) & 0x0080) != 0));
+            // The real guest driver must program AIDLow and its first reply
+            // slot before the first queued Wii CMD can leave the transport.
+            if (WiiDSBridge::IsActive(NDS.UserData) && !WiiDSMPStarted)
+            {
+                if (!IOPORT(W_AIDLow) || !((IOPORT(W_TXSlotReply1) | IOPORT(W_TXSlotReply2)) & 0x8000))
+                    return false;
+                WiiDSMPStarted = true;
+            }
+        }
+    }
     if (IOPORT(W_PowerState) & (1<<9))
         return false;
 
@@ -1671,6 +1733,8 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
 
             IsMP = true;
             IsMPClient = true;
+            if (WiiDSBridge::IsEnabled(NDS.UserData) && *(u16*)&RXBuffer[12+24+2] == 0)
+                WiiDSBridge::NotifyAssociationResponse(NDS.UserData, aid, CurChannel);
             USTimestamp = timestamp;
             NextSync = RXTimestamp + (framelen * (txrate==0x14 ? 4:8));
         }
@@ -1680,6 +1744,7 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
     }
     else if ((frametype == 0x00C0) && timestamp && macgood && IsMPClient)
     {
+        if (WiiDSBridge::IsEnabled(NDS.UserData)) WiiDSRound.Reset();
         IsMP = false;
         IsMPClient = false;
         NextSync = 0;
@@ -2158,6 +2223,12 @@ void Wifi::Write(u32 addr, u16 val)
                 IOPORT(W_BSSID2) = 0;
                 IOPORT(W_AIDLow) = 0;
                 IOPORT(W_AIDFull) = 0;
+                if (WiiDSBridge::IsEnabled(NDS.UserData))
+                {
+                    WiiDSRound.Reset(); WiiDSMPStarted = false;
+                    WiiDSBridge::NotifyAID(NDS.UserData, 0, CurChannel);
+                    WiiDSBridge::NotifyAssociationResponse(NDS.UserData, 0, CurChannel);
+                }
                 IOPORT(W_TXRetryLimit) = 0x0707;
                 IOPORT(0x02E) = 0;
                 IOPORT(W_RXBufBegin) = 0x4000;
@@ -2219,6 +2290,11 @@ void Wifi::Write(u32 addr, u16 val)
         return;
     case W_AIDFull:
         IOPORT(W_AIDFull) = val & 0x07FF;
+        if (WiiDSBridge::IsEnabled(NDS.UserData))
+        {
+            if (!IOPORT(W_AIDFull)) { WiiDSRound.Reset(); WiiDSMPStarted = false; }
+            WiiDSBridge::NotifyAID(NDS.UserData, IOPORT(W_AIDFull), CurChannel);
+        }
         return;
 
     case W_PowerUS:
@@ -2321,6 +2397,8 @@ void Wifi::Write(u32 addr, u16 val)
 
 
     case W_RXCnt:
+        if (((val & 0x0001) || !(val & 0x8000)) && WiiDSBridge::IsEnabled(NDS.UserData))
+            WiiDSRound.Reset();
         if (val & 0x0001)
         {
             IOPORT(W_RXBufWriteCursor) = IOPORT(W_RXBufWriteAddr);
@@ -2348,6 +2426,11 @@ void Wifi::Write(u32 addr, u16 val)
         }
         return;
 
+    case W_RXBufBegin:
+    case W_RXBufEnd:
+        if (WiiDSBridge::IsEnabled(NDS.UserData) && IOPORT(addr & 0xfff) != val)
+            WiiDSRound.Reset();
+        break;
     case W_RXBufReadAddr:
     case W_RXBufGapAddr:
         val &= 0x1FFE;
@@ -2355,8 +2438,15 @@ void Wifi::Write(u32 addr, u16 val)
     case W_RXBufGapSize:
     case W_RXBufCount:
     case W_RXBufWriteAddr:
-    case W_RXBufReadCursor:
         val &= 0x0FFF;
+        break;
+
+    case W_RXBufReadCursor:
+        val &= 0x0fff;
+        if (WiiDSBridge::IsEnabled(NDS.UserData))
+            WiiDSRound.CursorAdvanced(IOPORT(W_RXBufReadCursor), val,
+                                      (IOPORT(W_RXBufBegin) & 0x1ffe) >> 1,
+                                      (IOPORT(W_RXBufEnd) & 0x1ffe) >> 1);
         break;
 
 

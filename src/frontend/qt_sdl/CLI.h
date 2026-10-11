@@ -34,6 +34,7 @@ struct CommandLineOptions
     std::optional<QString> gbaRomArchivePath;
     bool fullscreen;
     bool boot;
+    std::optional<bool> wiiDS;
 };
 
 extern CommandLineOptions* ManageArgs(QApplication& melon);

@@ -39,6 +39,7 @@
 #include "Platform.h"
 #include "Net.h"
 #include "MPInterface.h"
+#include "WiiDSBridge.h"
 
 #include "NDS.h"
 #include "DSi.h"
@@ -129,6 +130,8 @@ EmuInstance::EmuInstance(int inst) : deleting(false),
 
     net.RegisterInstance(instanceID);
 
+    applyWiiDSSettings();
+
     emuThread = new EmuThread(this);
 
     numWindows = 0;
@@ -160,6 +163,8 @@ EmuInstance::~EmuInstance()
     emuThread->wait();
     delete emuThread;
 
+    WiiDSBridge::Release(this);
+
     net.UnregisterInstance(instanceID);
 
     audioDeInit();
@@ -180,6 +185,26 @@ std::string EmuInstance::instanceFileSuffix()
     char suffix[16] = {0};
     snprintf(suffix, 15, ".%d", instanceID+1);
     return suffix;
+}
+
+void EmuInstance::applyWiiDSSettings()
+{
+    const bool automatic = !wiiDSLaunchOverride.has_value() && localCfg.GetBool("WiiDS.Automatic");
+    const bool enabled = wiiDSLaunchOverride.value_or(localCfg.GetBool("WiiDS.Enabled"));
+    const bool wasEnabled = WiiDSBridge::IsEnabled(this);
+    const bool configured = automatic
+        ? WiiDSBridge::ConfigureAutomatic(this, true, localCfg.GetBool("WiiDS.Diagnostics"))
+        : WiiDSBridge::Configure(this, enabled, localCfg.GetBool("WiiDS.Diagnostics"));
+    if (!configured)
+        Platform::Log(Platform::LogLevel::Warn, "Wii-DS: another instance owns the Wii transport\n");
+    else if (!automatic && enabled && !wasEnabled)
+        MPInterface::Get().End(instanceID);
+}
+
+void EmuInstance::setWiiDSLaunchOverride(std::optional<bool> enabled)
+{
+    wiiDSLaunchOverride = enabled;
+    applyWiiDSSettings();
 }
 
 void EmuInstance::createWindow(int id)

@@ -44,6 +44,7 @@
 #include "Wifi.h"
 #include "Platform.h"
 #include "LocalMP.h"
+#include "WiiDSBridge.h"
 #include "Config.h"
 #include "RTC.h"
 #include "DSi.h"
@@ -155,6 +156,7 @@ void EmuThread::run()
     {
         if (emuInstance->instanceID == 0)
             MPInterface::Get().Process();
+        WiiDSBridge::Process(emuInstance); // Discover Dolphin even without a ROM or while paused.
 
         emuInstance->inputProcess();
 
@@ -489,6 +491,7 @@ void EmuThread::handleMessages()
             emuPauseStack = emuPauseStackRunning;
 
             emuInstance->audioDisable();
+            WiiDSBridge::ResetRadio(emuInstance);
             MPInterface::Get().End(emuInstance->instanceID);
             break;
 
@@ -535,6 +538,7 @@ void EmuThread::handleMessages()
         case msg_EmuStop:
             if (msg.param.value<bool>())
                 emuInstance->nds->Stop();
+            WiiDSBridge::ResetRadio(emuInstance);
             emuStatus = emuStatus_Paused;
             emuActive = false;
 

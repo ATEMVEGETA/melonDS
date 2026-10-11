@@ -111,6 +111,9 @@ DefaultList<bool> DefaultBools =
 #endif
 #endif
     {"DSi.DSP.HLE", true},
+    {"Instance*.WiiDS.Enabled", false},
+    {"Instance*.WiiDS.Automatic", false},
+    {"Instance*.WiiDS.Diagnostics", false},
 };
 
 DefaultList<std::string> DefaultStrings =
