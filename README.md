@@ -8,6 +8,15 @@
 > **Pokémon Battle Revolution**.
 > This work is not affiliated with or endorsed by the upstream melonDS project.
 
+## Wii–DS Link download
+
+**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.1.0-beta.1/melonDS-1.1-WiiDS-Link-Windows-x64-v0.1.0-beta.1.zip)**
+
+See the [v0.1.0-beta.1 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.1.0-beta.1)
+for its SHA-256 checksum and source snapshot links. The
+[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.1.0-beta.1)
+also includes the matching Dolphin build.
+
 See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
 build information. Games, BIOS, firmware, and saves are not included.
 
