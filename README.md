@@ -91,3 +91,6 @@ the Free Software Foundation, either version 3 of the License, or
 
 ### External
 * Images used in the Input Config Dialog - see `src/frontend/qt_sdl/InputConfig/resources/LICENSE.md`
+
+### Development Note
+This project was developed with the assistance of OpenAI Codex (AI), which helped with coding, debugging, and implementing new features. I provided the ideas, requirements, and direction for the project, along with testing and feedback throughout development.
