@@ -8,9 +8,6 @@
 > **Pokémon Battle Revolution**.
 > This work is not affiliated with or endorsed by the upstream melonDS project.
 
-## Development Note
-This project was developed with the assistance of OpenAI Codex (AI), which helped with coding, debugging, and implementing new features. I provided the ideas, requirements, and direction for the project, along with testing and feedback throughout development.
-
 ## Wii–DS Link download
 
 **[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.1.0-beta.1/melonDS-1.1-WiiDS-Link-Windows-x64-v0.1.0-beta.1.zip)**
@@ -78,3 +75,5 @@ the Free Software Foundation, either version 3 of the License, or
 ### External
 * Images used in the Input Config Dialog - see `src/frontend/qt_sdl/InputConfig/resources/LICENSE.md`
 
+## Development Note
+This project was developed with the assistance of OpenAI Codex (AI), which helped with coding, debugging, and implementing new features. I provided the ideas, requirements, and direction for the project, along with testing and feedback throughout development.
