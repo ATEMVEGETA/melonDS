@@ -5,20 +5,27 @@
 > Downloads, setup instructions, compatibility notes, and matching version
 > links are maintained at [Wii-DS-Link](https://github.com/ATEMVEGETA/Wii-DS-Link).
 > It has been tested so far with **My Pokémon Ranch** and
-> **Pokémon Battle Revolution**.
+> **Pokémon Battle Revolution**, including four DS players in DS Battle Mode.
 > This work is not affiliated with or endorsed by the upstream melonDS project.
 
 ## Wii–DS Link download
 
-**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.1.0-beta.1/melonDS-1.1-WiiDS-Link-Windows-x64-v0.1.0-beta.1.zip)**
+**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.2.0-beta.1/melonDS-1.1-WiiDS-Link-Windows-x64-v0.2.0-beta.1.zip)**
 
-See the [v0.1.0-beta.1 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.1.0-beta.1)
+See the [v0.2.0-beta.1 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.1)
 for its SHA-256 checksum and source snapshot links. The
-[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.1.0-beta.1)
+[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.1)
 also includes the matching Dolphin build.
 
+This release adds independent multi-instance radios. The bridge has 15 DS
+client slots; eight-client transport passed automated checks, while actual
+four-player Battle Revolution and one-DS Ranch regression tests were reported
+successful. Each game still limits its own player count. Use both emulators
+from v0.2.0-beta.1 when testing multiplayer.
+
 See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
-build information. Games, BIOS, firmware, and saves are not included.
+build information, and [WII-DS-BUILD.md](WII-DS-BUILD.md) for this Windows build.
+Games, BIOS, firmware, and saves are not included.
 
 <p align="center"><img src="https://raw.githubusercontent.com/melonDS-emu/melonDS/master/res/icon/melon_128x128.png"></p>
 <h2 align="center"><b>melonDS</b></h2>

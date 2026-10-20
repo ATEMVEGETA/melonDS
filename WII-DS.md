@@ -16,8 +16,19 @@ discovered Wii parent. Disconnects clear this routing. A lost selected parent
 is delivered once through the core's existing host-loss path, preventing the
 former shutdown freeze caused by falling into LocalMP's timed receive.
 
-The transport uses nonblocking UDP on IPv4 loopback port 7065. This version
-supports one Dolphin and one selected melonDS instance on the same computer.
+This multi-DS release uses one exclusive nonblocking IPv4 loopback
+socket per melonDS instance, selected from ports 7065 through 7080. One Dolphin
+can track up to 15 associated DS clients; each game still imposes its own
+player limit. Both Launch new instance and separate processes are supported
+by the transport. Enable Connect to Dolphin in every participant before
+loading its game. A socket-slot suffix gives each guest a distinct in-memory
+firmware MAC without changing the saved firmware or settings.
+
+An M2-capable Dolphin sends round-tagged commands and collects real replies
+from every targeted DS before returning a shared failure mask. Missing peers
+remain failures; a one-second host watchdog bounds an unfinished round. The
+older type-7 single-client transport remains supported for legacy companions,
+but do not mix old and new builds in one multiplayer session.
 It is not internet play, physical Wi-Fi, a real-console bridge, or a claim of
 universal Wii–DS compatibility. Native Download Play code is transferred by
 the running Wii game and executed by the DS guest from RAM; the original
@@ -36,9 +47,11 @@ preference uses automatic discovery, not the forced backend.
 
 Earlier experimental builds were verified with My Pokémon Ranch and Pokémon
 Diamond/Pearl, and Pokémon Battle Revolution with a correctly paired DS save.
-The public beta uses the same protocol implementation and has passed isolated
-transport/startup validation, but still needs a fresh retail transfer test on
-the exact published binaries. Those results do not certify every game.
+For v0.2.0-beta.1, the tester reported successful four-player Battle Revolution,
+one-player disconnect/rejoin while the others stayed connected, and a normal
+Ranch transfer/save/shutdown regression. Automated transport checks exercised
+eight DS contexts and separate processes. Eight-player retail gameplay and
+every other Wii-DS title have not been established by these tests.
 Games, BIOS, firmware, NAND, saves, and captured game payloads are not included.
 
 ## Local Windows build

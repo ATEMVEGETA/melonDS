@@ -29,6 +29,9 @@ bool ConsumeHostDisconnect(void* instance);
 void Process(void* instance);
 void ResetRadio(void* instance);
 u64 Generation(void* instance);
+// A context retains its exclusively bound radio port for its lifetime. The
+// slot also distinguishes guest MACs across separately launched processes.
+unsigned IdentitySlot(void* instance);
 int Send(void* instance, const u8* data, int length);
 int Receive(void* instance, u8* data, u64* timestamp, bool host);
 void SetCommandAllowed(void* instance, bool allowed);

@@ -196,7 +196,7 @@ void EmuInstance::applyWiiDSSettings()
         ? WiiDSBridge::ConfigureAutomatic(this, true, localCfg.GetBool("WiiDS.Diagnostics"))
         : WiiDSBridge::Configure(this, enabled, localCfg.GetBool("WiiDS.Diagnostics"));
     if (!configured)
-        Platform::Log(Platform::LogLevel::Warn, "Wii-DS: another instance owns the Wii transport\n");
+        Platform::Log(Platform::LogLevel::Warn, "Wii-DS: could not configure this instance's radio\n");
     else if (!automatic && enabled && !wasEnabled)
         MPInterface::Get().End(instanceID);
 }
@@ -1777,12 +1777,17 @@ void EmuInstance::customizeFirmware(Firmware& firmware, bool overridesettings) n
         }
     }
 
-    if (instanceID > 0)
+    // Independent processes can all have frontend instance ID zero. The
+    // exclusive bridge socket slot distinguishes every local virtual DS,
+    // including those processes, without changing stored firmware/config.
+    const unsigned radioID = WiiDSBridge::IsDiscoverable(this)
+        ? WiiDSBridge::IdentitySlot(this) : unsigned(instanceID);
+    if (radioID > 0)
     {
         rep = true;
-        mac[3] += instanceID;
-        mac[4] += instanceID*0x44;
-        mac[5] += instanceID*0x10;
+        mac[3] += radioID;
+        mac[4] += radioID*0x44;
+        mac[5] += radioID*0x10;
     }
 
     if (rep)
