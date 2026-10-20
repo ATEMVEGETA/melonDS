@@ -64,24 +64,7 @@ As for the rest, the interface should be pretty straightforward. If you have a q
 ## How to build
 See [BUILD.md](./BUILD.md) for build instructions.
 
-## TODO LIST
-
- * better DSi emulation
- * better OpenGL rendering
- * netplay
- * the impossible quest of pixel-perfect 3D graphics
- * support for rendering screens to separate windows
- * emulating some fancy addons
- * other non-core shit (debugger, graphics viewers, etc)
-
-### TODO LIST FOR LATER (low priority)
-
- * big-endian compatibility (Wii, etc)
- * LCD refresh time (used by some games for blending effects)
- * any feature you can eventually ask for that isn't outright stupid
-
 ## Credits
-
  * Martin for GBAtek, a good piece of documentation
  * Cydrak for the extra 3D GPU research
  * limittox for the icon
@@ -98,3 +81,6 @@ the Free Software Foundation, either version 3 of the License, or
 
 ### External
 * Images used in the Input Config Dialog - see `src/frontend/qt_sdl/InputConfig/resources/LICENSE.md`
+
+## Development Note
+This project was developed with the assistance of OpenAI Codex (AI), which helped with coding, debugging, and implementing new features. I provided the ideas, requirements, and direction for the project, along with testing and feedback throughout development.
