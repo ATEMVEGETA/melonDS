@@ -786,7 +786,6 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actEmuSettings->setEnabled(false);
             actVideoSettings->setEnabled(false);
             actMPSettings->setEnabled(false);
-            actWifiSettings->setEnabled(false);
             actInterfaceSettings->setEnabled(false);
 
 #ifdef __APPLE__
@@ -2012,6 +2011,15 @@ void MainWindow::onMPSettingsFinished(int res)
 
 void MainWindow::onOpenWifiSettings()
 {
+    // The dialog owns one instance's pause and local Wii-link preferences.
+    // Reusing it from another window must not pause/connect that window too.
+    if (WifiSettingsDialog::currentDlg)
+    {
+        WifiSettingsDialog::currentDlg->raise();
+        WifiSettingsDialog::currentDlg->activateWindow();
+        return;
+    }
+
     emuThread->emuPause();
 
     WifiSettingsDialog* dlg = WifiSettingsDialog::openDlg(this);

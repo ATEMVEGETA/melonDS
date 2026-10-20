@@ -29,7 +29,7 @@
      <layout class="QVBoxLayout" name="wiiDSLayout">
       <item><widget class="QCheckBox" name="chkWiiDS">
        <property name="text"><string>Connect to Dolphin</string></property>
-       <property name="toolTip"><string>Automatically discover Dolphin on this computer. Normal DS-DS wireless remains available until the game chooses the Wii. Stop the game before changing this option. Only one instance can use the Wii link.</string></property>
+       <property name="toolTip"><string>Automatically discover Dolphin for this DS instance. Multiple instances can connect to the same Wii, subject to the game's player limit. Normal DS-DS wireless remains available until the game chooses the Wii. Stop this instance's game before changing the option.</string></property>
       </widget></item>
       <item><widget class="QCheckBox" name="chkWiiDSDiagnostics">
        <property name="text"><string>Write optional Wii-DS diagnostic log</string></property>

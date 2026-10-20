@@ -10,6 +10,19 @@ in the companion Dolphin fork. Either emulator may be opened first; launch,
 pause, stop, and restart do not require an external relay or console window.
 The games' own connection screens still initiate the actual link.
 
+Wi-Fi settings can be opened from every instance, including windows created
+with **System → Launch new instance**. The dialog title identifies its owner,
+and **Connect to Dolphin** changes that instance only. If a secondary instance
+was saved with the option off, use its **System → Stop**, open **Config → Wi-Fi
+settings**, enable the option and accept, then start its game again. There is
+no need to edit or delete `melonDS.toml`. Stop rather than merely pause the
+game before changing radio ownership; launch-only CLI overrides remain locked.
+
+Shared online network mode/adapter settings are editable only from the first
+instance. Changing a Wii-link preference or cancelling the dialog does not
+restart that shared online backend. Only one Wi-Fi dialog is open at a time;
+close the existing dialog before opening another instance's settings.
+
 Automatic discovery does not disable normal DS–DS wireless. The guest selects
 the Wii radio only when it sends authentication or association to the
 discovered Wii parent. Disconnects clear this routing. A lost selected parent

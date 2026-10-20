@@ -67,6 +67,10 @@ private:
     Ui::WifiSettingsDialog* ui;
     EmuInstance* emuInstance;
 
+    bool canEditSharedNetwork = false;
+    bool initialDirectMode = false;
+    int initialAdapterIndex = -1;
+
     bool haspcap;
 
     void updateAdapterControls();
