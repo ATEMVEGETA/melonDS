@@ -10,18 +10,26 @@
 
 ## Wii–DS Link download
 
-**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.2.0-beta.1/melonDS-1.1-WiiDS-Link-Windows-x64-v0.2.0-beta.1.zip)**
+**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.2.0-beta.2/melonDS-1.1-WiiDS-Link-Windows-x64-v0.2.0-beta.2.zip)**
 
-See the [v0.2.0-beta.1 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.1)
+See the [v0.2.0-beta.2 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.2)
 for its SHA-256 checksum and source snapshot links. The
-[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.1)
+[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.2)
 also includes the matching Dolphin build.
 
-This release adds independent multi-instance radios. The bridge has 15 DS
-client slots; eight-client transport passed automated checks, while actual
-four-player Battle Revolution and one-DS Ranch regression tests were reported
-successful. Each game still limits its own player count. Use both emulators
-from v0.2.0-beta.1 when testing multiplayer.
+This hotfix makes **Config → Wifi settings** available in every DS instance,
+including existing secondary instances saved with **Connect to Dolphin** off.
+The preference remains per-instance. Stop that instance's game before changing
+it; there is no need to edit or delete `melonDS.toml`. Shared online adapter
+settings remain editable only in the first instance, and Wii-only changes or
+Cancel no longer restart shared networking.
+
+Use this melonDS with the unchanged **Dolphin v0.2.0-beta.1** Wii–DS Link build.
+The multi-DS transport is unchanged: 15 client slots, subject to the game's
+limit, and eight-client automated transport checks. Four-player Battle
+Revolution and one-DS Ranch were confirmed on v0.2.0-beta.1. The hotfix passed
+automated Qt dialog/persistence and standalone frontend checks; fresh retail
+game testing of this executable has not been confirmed.
 
 See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
 build information, and [WII-DS-BUILD.md](WII-DS-BUILD.md) for this Windows build.
