@@ -27,8 +27,20 @@ The per-instance Wi-Fi settings fix and multi-DS support are retained.
 Automated checks exercised eight clients with a non-default parent address.
 Four-player Battle Revolution and Ranch retail results are from beta.1;
 those complete flows were not freshly retested for this identity update.
-The upstream bases remain melonDS 1.1 and Dolphin 2609a. No macOS binary for
-this fix is published yet; earlier experimental Mac builds are not this fix.
+The upstream bases remain melonDS 1.1 and Dolphin 2609a.
+
+### Experimental macOS downloads
+
+Native **Apple Silicon (arm64)** and **Intel (x86_64)** builds with the beta.3
+fix are available in the [macOS tester prerelease](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.3-macos.1).
+Both require **macOS 15 or newer**. Use the matching Dolphin from the
+[combined macOS package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.3-macos.1).
+Compilation, native startup and automated link checks passed; actual Mac
+gameplay and transfers are **not yet verified**. These are ad-hoc signed,
+not Developer-ID signed or notarized. Intel melonDS is interpreter-only in
+this source base. See the [Mac testing guide](https://github.com/ATEMVEGETA/Wii-DS-Link/blob/main/MACOS-TESTING.md)
+for setup, limitations and reporting results. Windows remains the recommended
+game-tested download above.
 
 See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
 build information, and [WII-DS-BUILD.md](WII-DS-BUILD.md) for this Windows build.
