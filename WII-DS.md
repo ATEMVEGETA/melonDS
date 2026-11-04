@@ -42,6 +42,18 @@ from every targeted DS before returning a shared failure mask. Missing peers
 remain failures; a one-second host watchdog bounds an unfinished round. The
 older type-7 single-client transport remains supported for legacy companions,
 but do not mix old and new builds in one multiplayer session.
+
+P1-capable companions send their actual parent MAC atomically with each
+Nintendo beacon. That per-radio identity is used for discovery, association,
+commands, replies and ACKs; no Dolphin networking setting or DS save is edited.
+It stays pinned until the WD session stops or expires; changing a parent's
+identity requires a new session, so delayed packets cannot switch it back.
+This fixes an identity mismatch that could prevent Battle Revolution Mystery
+Gifts with a fresh Dolphin profile. New melonDS still accepts older Dolphin's
+legacy fixed-address beacon, but use a matching updated pair for this fix.
+An updated Dolphin will not advertise an inconsistent address to an old
+melonDS that cannot represent its configured parent identity.
+
 It is not internet play, physical Wi-Fi, a real-console bridge, or a claim of
 universal Wii–DS compatibility. Native Download Play code is transferred by
 the running Wii game and executed by the DS guest from RAM; the original

@@ -34,7 +34,7 @@ constexpr u16 FirstPort = 7065, LastPort = 7080;
 constexpr char Hello[] = "WIIDSBRIDGE/1 DOLPHIN HELLO";
 constexpr char Ack[] = "WIIDSBRIDGE/1 MELONDS ACK";
 constexpr std::array<u8, 8> Magic{'W','D','S','B','0','0','0','1'};
-constexpr std::array<u8, 6> WiiMAC{0x00,0x17,0xab,0x4d,0xb9,0xe0};
+constexpr std::array<u8, 6> LegacyWiiMAC{0x00,0x17,0xab,0x4d,0xb9,0xe0};
 constexpr u8 CommandMAC[6] = {0x03,0x09,0xbf,0x00,0x00,0x00};
 constexpr u8 AckMAC[6] = {0x03,0x09,0xbf,0x00,0x00,0x03};
 constexpr u8 ReplyMAC[6] = {0x03,0x09,0xbf,0x00,0x00,0x10};
@@ -68,6 +68,8 @@ bool HostDisconnectPending = false;
 Socket Listener = InvalidSocket;
 sockaddr_in Peer{};
 bool HavePeer = false, HaveBeacon = false, Associated = false;
+bool HaveParentIdentity = false;
+std::array<u8, 6> ParentMAC = LegacyWiiMAC;
 bool CommandAllowed = true, HaveClientMAC = false;
 u8 Channel = 1, ExpectedChannel = 0, DTIM = 0;
 u16 RadioSequence = 1, BeaconSequence = 0, CommandSequence = 0;
@@ -119,6 +121,7 @@ void ClearRadio(bool clearBeacon)
     ++SessionGeneration;
     if (clearBeacon)
     {
+        HaveParentIdentity = false; ParentMAC = LegacyWiiMAC;
         HaveBeacon = false; BeaconData.fill(0); BeaconTimestamp.fill(0);
         RadioSequence = 1; BeaconSequence = CommandSequence = 0; DTIM = 0;
     }
@@ -202,8 +205,8 @@ void QueueBeacon(u8 channel)
     packet[8] = 0x0a; packet[9] = channel;
     const auto append = [&](std::initializer_list<u8> bytes) { packet.insert(packet.end(), bytes); };
     append({0x80,0,0,0}); append({0xff,0xff,0xff,0xff,0xff,0xff});
-    packet.insert(packet.end(), WiiMAC.begin(), WiiMAC.end());
-    packet.insert(packet.end(), WiiMAC.begin(), WiiMAC.end());
+    packet.insert(packet.end(), ParentMAC.begin(), ParentMAC.end());
+    packet.insert(packet.end(), ParentMAC.begin(), ParentMAC.end());
     append({u8(BeaconSequence << 4),u8(BeaconSequence >> 4)});
     BeaconSequence = (BeaconSequence + 1) & 0xfff;
     const auto time = Platform::GetUSCount();
@@ -227,7 +230,7 @@ std::vector<u8> MakeAck(u16 failure = 0)
     auto* frame = ack.data() + 12;
     frame[0] = 0x18; frame[1] = 0x02;
     std::memcpy(frame + 4, AckMAC, 6);
-    std::memcpy(frame + 10, WiiMAC.data(), 6); std::memcpy(frame + 16, WiiMAC.data(), 6);
+    std::memcpy(frame + 10, ParentMAC.data(), 6); std::memcpy(frame + 16, ParentMAC.data(), 6);
     frame[22] = u8(CommandSequence << 4); frame[23] = u8(CommandSequence >> 4);
     CommandSequence = (CommandSequence + 1) & 0xfff;
     frame[24] = 0x28; // Existing capture-validated bridge ACK countdown, not SDK deadline.
@@ -250,7 +253,7 @@ void QueueCommand(const u8* application, size_t length, const WiiDSMPSettings& c
     auto* frame = radio.data() + 12;
     frame[0] = 0x28; frame[1] = 0x02; frame[2] = u8(config.Duration); frame[3] = u8(config.Duration >> 8);
     std::memcpy(frame + 4, CommandMAC, 6);
-    std::memcpy(frame + 10, WiiMAC.data(), 6); std::memcpy(frame + 16, WiiMAC.data(), 6);
+    std::memcpy(frame + 10, ParentMAC.data(), 6); std::memcpy(frame + 16, ParentMAC.data(), 6);
     frame[22] = u8(CommandSequence << 4); frame[23] = u8(CommandSequence >> 4);
     CommandSequence = (CommandSequence + 1) & 0xfff;
     frame[24] = u8(config.ReplyTime); frame[25] = u8(config.ReplyTime >> 8);
@@ -302,7 +305,7 @@ void Pump()
             if (HavePeer && !SamePeer(sender)) continue; // A second Dolphin cannot silently take over.
             if (!HavePeer) { ClearRadio(true); Peer = sender; HavePeer = true; Log("PEER_HELLO"); }
             LastHello = now;
-            char response[96]; const auto length = std::snprintf(response, sizeof(response), "%s %016llX M2", Ack,
+            char response[96]; const auto length = std::snprintf(response, sizeof(response), "%s %016llX P1 M2", Ack,
                                          static_cast<unsigned long long>(BindNonce));
             sendto(Listener, response, length, 0, reinterpret_cast<const sockaddr*>(&sender), size);
             continue;
@@ -312,8 +315,34 @@ void Pump()
         if (static_cast<size_t>(received) != 11 + length) continue;
         const auto* body = packet.data() + 11;
         if (packet[8] == 8 && length == 0) { ClearPeer("PEER_STOP"); continue; }
-        if (packet[8] == 2 && length == 130)
+        if ((packet[8] == 2 && length == 130 && !HaveParentIdentity) ||
+            (packet[8] == 12 && length == 136))
         {
+            // P1 carries the parent identity and beacon atomically. The Wii
+            // guest uses this same normal MAC through WD and NCD; never guess
+            // it from game payloads or rewrite a user's networking settings.
+            if (packet[8] == 12)
+            {
+                std::array<u8, 6> parent{};
+                std::memcpy(parent.data(), body, parent.size());
+                if ((parent[0] & 1) || std::all_of(parent.begin(), parent.end(), [](u8 b) { return b == 0; }))
+                { Log("INVALID_PARENT_IDENTITY"); continue; }
+                // The parent MAC is immutable during one WD session. Without
+                // a wire epoch, accepting an in-place change would let an old
+                // duplicated beacon switch the active radio back again.
+                if (HaveParentIdentity && parent != ParentMAC)
+                { Log("PARENT_CHANGE_REQUIRES_SESSION"); continue; }
+                if (HaveBeacon && parent != ParentMAC)
+                {
+                    const bool lostSelectedHost = Automatic && Selected;
+                    ClearRadio(true);
+                    if (lostSelectedHost) HostDisconnectPending = true;
+                }
+                const bool changed = !HaveParentIdentity || parent != ParentMAC;
+                ParentMAC = parent; HaveParentIdentity = true;
+                if (changed) Log("PARENT_IDENTITY");
+                body += parent.size();
+            }
             // Only discard old beacon copies; in-flight native radio work stays intact.
             RadioFrames.erase(std::remove_if(RadioFrames.begin(), RadioFrames.end(), [](const auto& p) {
                 return p.size() > 12 && p[12] == 0x80;
@@ -346,6 +375,12 @@ void Pump()
         else if (packet[8] == 5 && length >= 12 + 28 && length <= MaxRadioPacket &&
                  static_cast<size_t>(u16(body[10]) | (u16(body[11]) << 8)) == length - 12)
         {
+            // A late management response from a previous parent must not
+            // associate the core with that old BSSID after a fresh session.
+            if (HaveParentIdentity && (body[12] & 0x0c) == 0 &&
+                (std::memcmp(body + 22, ParentMAC.data(), 6) ||
+                 std::memcmp(body + 28, ParentMAC.data(), 6)))
+            { Log("FOREIGN_PARENT_MANAGEMENT"); continue; }
             if (RadioFrames.size() >= MaxQueuedPackets) { ClearPeer("QUEUE_OVERFLOW"); continue; }
             RadioFrames.emplace_front(body, body + length);
             Log("MANAGEMENT_QUEUED", body[12]);
@@ -424,10 +459,10 @@ bool Context::SelectForTransmit(const u8* data, int length)
         static_cast<size_t>(length) > MaxRadioPacket ||
         (u16(data[10]) | (u16(data[11]) << 8)) != length - 12) return false;
     const u8* frame = data + 12;
-    if ((frame[1] & 0x43) || std::memcmp(frame + 4, WiiMAC.data(), 6) ||
-        std::memcmp(frame + 16, WiiMAC.data(), 6) || (frame[10] & 1)) return false;
+    if ((frame[1] & 0x43) || std::memcmp(frame + 4, ParentMAC.data(), 6) ||
+        std::memcmp(frame + 16, ParentMAC.data(), 6) || (frame[10] & 1)) return false;
     constexpr u8 empty[6]{};
-    if (!std::memcmp(frame + 10, empty, 6) || !std::memcmp(frame + 10, WiiMAC.data(), 6)) return false;
+    if (!std::memcmp(frame + 10, empty, 6) || !std::memcmp(frame + 10, ParentMAC.data(), 6)) return false;
     const bool association = frame[0] == 0x00;
     const bool authentication = frame[0] == 0xb0 && length >= 12 + 24 + 6 + 4 &&
         frame[24] == 0 && frame[25] == 0 && frame[26] == 1 && frame[27] == 0 &&
@@ -441,9 +476,10 @@ bool Context::SelectForTransmit(const u8* data, int length)
 bool IsWiiFrame(void* instance, const u8* data, int length)
 {
     std::lock_guard<std::mutex> lock(Mutex);
-    return Find(instance) && data && length >= 12 + 24 &&
-        !std::memcmp(data + 12 + 10, WiiMAC.data(), 6) &&
-        !std::memcmp(data + 12 + 16, WiiMAC.data(), 6);
+    const auto* context = Find(instance);
+    return context && data && length >= 12 + 24 &&
+        !std::memcmp(data + 12 + 10, context->ParentMAC.data(), 6) &&
+        !std::memcmp(data + 12 + 16, context->ParentMAC.data(), 6);
 }
 bool ConsumeHostDisconnect(void* instance)
 {
@@ -471,7 +507,12 @@ unsigned IdentitySlot(void* instance)
     context->EnsureSocket();
     return context->Listener != InvalidSocket ? context->BoundPort - FirstPort : 0;
 }
-std::array<u8,6> ParentBSSID() { return WiiMAC; }
+std::array<u8,6> ParentBSSID(void* instance)
+{
+    std::lock_guard<std::mutex> lock(Mutex);
+    const auto* context = Find(instance);
+    return context ? context->ParentMAC : LegacyWiiMAC;
+}
 void SetCommandAllowed(void* instance, bool allowed)
 { std::lock_guard<std::mutex> lock(Mutex); if (auto* c = Find(instance)) c->CommandAllowed = allowed; }
 
@@ -489,7 +530,7 @@ int Context::SendPacket(const u8* data, int length)
     const auto* frame = data + 12;
     const bool reply = Associated && HaveClientMAC && data[9] == Channel && length >= 12 + 24 + 4 &&
         (frame[0] == 0x18 || frame[0] == 0x58) && (frame[1] & 3) == 1 &&
-        !std::memcmp(frame + 4, WiiMAC.data(), 6) && !std::memcmp(frame + 10, ClientMAC.data(), 6) &&
+        !std::memcmp(frame + 4, ParentMAC.data(), 6) && !std::memcmp(frame + 10, ClientMAC.data(), 6) &&
         !std::memcmp(frame + 16, ReplyMAC, 6) && ExpectedAID > 0 && ExpectedAID < 16;
     if (reply && MultiRound && !CurrentRound) return 0;
     if (reply && CurrentRound)
@@ -502,7 +543,7 @@ int Context::SendPacket(const u8* data, int length)
     }
     else if (SendEnvelope(3, data, length) != 11 + length) return 0;
     if (!Associated && length >= 12 + 24 + 4 + 4 && frame[0] == 0 && (frame[1] & 3) == 0 &&
-        !std::memcmp(frame + 4, WiiMAC.data(), 6) && !std::memcmp(frame + 16, WiiMAC.data(), 6) &&
+        !std::memcmp(frame + 4, ParentMAC.data(), 6) && !std::memcmp(frame + 16, ParentMAC.data(), 6) &&
         !(frame[10] & 1))
     {
         constexpr u8 empty[6]{};
@@ -554,7 +595,7 @@ int Context::ReceivePacket(u8* data, u64* timestamp, bool host)
             Log("MP_ACK_FAILURE_MASK", failure);
         }
     }
-    if (packet.size() >= 12 + 24 && !std::memcmp(packet.data() + 22, WiiMAC.data(), 6))
+    if (packet.size() >= 12 + 24 && !std::memcmp(packet.data() + 22, ParentMAC.data(), 6))
     {
         packet[34] = (packet[34] & 0xf) | u8(RadioSequence << 4);
         packet[35] = u8(RadioSequence >> 4); RadioSequence = (RadioSequence + 1) & 0xfff;

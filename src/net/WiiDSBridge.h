@@ -37,7 +37,8 @@ int Receive(void* instance, u8* data, u64* timestamp, bool host);
 void SetCommandAllowed(void* instance, bool allowed);
 void NotifyAssociationResponse(void* instance, u16 aid, u8 channel);
 void NotifyAID(void* instance, u16 aid, u8 channel);
-std::array<u8, 6> ParentBSSID();
+// The selected Dolphin's identity is per radio, not a globally fixed address.
+std::array<u8, 6> ParentBSSID(void* instance);
 }
 }
 #endif

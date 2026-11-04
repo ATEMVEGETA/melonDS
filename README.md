@@ -10,26 +10,27 @@
 
 ## Wii–DS Link download
 
-**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.2.0-beta.2/melonDS-1.1-WiiDS-Link-Windows-x64-v0.2.0-beta.2.zip)**
+**[Download melonDS 1.1 Wii–DS Link for Windows x64](https://github.com/ATEMVEGETA/melonDS/releases/download/wii-ds-link-v0.2.0-beta.3/melonDS-1.1-WiiDS-Link-Windows-x64-v0.2.0-beta.3.zip)**
 
-See the [v0.2.0-beta.2 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.2)
+See the [v0.2.0-beta.3 release page](https://github.com/ATEMVEGETA/melonDS/releases/tag/wii-ds-link-v0.2.0-beta.3)
 for its SHA-256 checksum and source snapshot links. The
-[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.2)
+[combined package](https://github.com/ATEMVEGETA/Wii-DS-Link/releases/tag/v0.2.0-beta.3)
 also includes the matching Dolphin build.
 
-This hotfix makes **Config → Wifi settings** available in every DS instance,
-including existing secondary instances saved with **Connect to Dolphin** off.
-The preference remains per-instance. Stop that instance's game before changing
-it; there is no need to edit or delete `melonDS.toml`. Shared online adapter
-settings remain editable only in the first instance, and Wii-only changes or
-Cancel no longer restart shared networking.
+This update fixes Battle Revolution Mystery Gift receipt when Dolphin's
+normal MAC differs from the bridge's old fixed address. melonDS now learns
+the real parent identity without editing networking settings or saves.
+**Update both emulators to v0.2.0-beta.3**; no manual MAC workaround is needed.
+Gift receipt was confirmed with this exact pair and repeated successfully.
+The game's signal-located popup may appear on first detection; it is not
+suppressed, and the tester did not see it on the next attempt.
 
-Use this melonDS with the unchanged **Dolphin v0.2.0-beta.1** Wii–DS Link build.
-The multi-DS transport is unchanged: 15 client slots, subject to the game's
-limit, and eight-client automated transport checks. Four-player Battle
-Revolution and one-DS Ranch were confirmed on v0.2.0-beta.1. The hotfix passed
-automated Qt dialog/persistence and standalone frontend checks; fresh retail
-game testing of this executable has not been confirmed.
+The per-instance Wi-Fi settings fix and multi-DS support are retained.
+Automated checks exercised eight clients with a non-default parent address.
+Four-player Battle Revolution and Ranch retail results are from beta.1;
+those complete flows were not freshly retested for this identity update.
+The upstream bases remain melonDS 1.1 and Dolphin 2609a. No macOS binary for
+this fix is published yet; earlier experimental Mac builds are not this fix.
 
 See [WII-DS.md](WII-DS.md) for implementation details, limitations, and local
 build information, and [WII-DS-BUILD.md](WII-DS-BUILD.md) for this Windows build.

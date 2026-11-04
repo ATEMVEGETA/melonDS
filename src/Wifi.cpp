@@ -1502,7 +1502,7 @@ void Wifi::FinishRX()
 
         if (WiiDSBridge::IsEnabled(NDS.UserData) && WiiDSBridge::IsActive(NDS.UserData))
         {
-            const auto parent = WiiDSBridge::ParentBSSID();
+            const auto parent = WiiDSBridge::ParentBSSID(NDS.UserData);
             if (MACEqual(&RXBuffer[12 + 10], parent.data()) && MACEqual(&RXBuffer[12 + 16], parent.data()))
             {
                 if ((framectl & 0x00fc) == 0x00c0 || (framectl & 0x00fc) == 0x00a0)
