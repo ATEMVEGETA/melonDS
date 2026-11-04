@@ -22,8 +22,6 @@ normal MAC differs from the bridge's old fixed address. melonDS now learns
 the real parent identity without editing networking settings or saves.
 **Update both emulators to v0.2.0-beta.3**; no manual MAC workaround is needed.
 Gift receipt was confirmed with this exact pair and repeated successfully.
-The game's signal-located popup may appear on first detection; it is not
-suppressed, and the tester did not see it on the next attempt.
 
 The per-instance Wi-Fi settings fix and multi-DS support are retained.
 Automated checks exercised eight clients with a non-default parent address.
