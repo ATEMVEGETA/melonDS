@@ -5,6 +5,7 @@
  * No cached client ROM, synthetic game reply, or CPU patch is used here.
  */
 #include "WiiDSBridge.h"
+#include "WiiDSBeacon.h"
 #include "WiiDSMPConfig.h"
 #include "Platform.h"
 #include <algorithm>
@@ -438,9 +439,10 @@ void QueueBeacon(u8 channel)
     append({0x01,0x08,0x82,0x84,0x0b,0x16,0x24,0x30,0x48,0x6c});
     append({0x03,0x01,channel}); append({0x05,0x04,DTIM,0x02,0,0}); DTIM ^= 1;
     append({0x2a,0x01,0,0x2f,0x01,0,0x32,0x04,0x0c,0x12,0x18,0x60});
-    append({0xdd,0x88,0,0x09,0xbf,0,0xff,0xff});
+    const auto gameInfoLength = NintendoGameInfoLength(BeaconData);
+    append({0xdd,u8(8 + gameInfoLength),0,0x09,0xbf,0,0xff,0xff});
     packet.insert(packet.end(), BeaconTimestamp.begin(), BeaconTimestamp.end());
-    packet.insert(packet.end(), BeaconData.begin(), BeaconData.end());
+    packet.insert(packet.end(), BeaconData.begin(), BeaconData.begin() + gameInfoLength);
     append({0xdd,0x09,0,0x10,0x18,0x02,0,0xf0,0,0,0,0,0,0,0});
     const auto length = packet.size() - 12;
     packet[10] = u8(length); packet[11] = u8(length >> 8);
@@ -601,8 +603,9 @@ void Pump()
                     hash = (hash ^ BeaconData[i]) * 16777619u;
                     std::snprintf(hex + 2 * i, sizeof(hex) - 2 * i, "%02X", unsigned(BeaconData[i]));
                 }
-                Trace("BEACON_NATIVE_METADATA", "timestamp=%02X%02X native_fnv1a32=%08X native_bytes=128 native_hex=%s",
-                      unsigned(BeaconTimestamp[0]), unsigned(BeaconTimestamp[1]), hash, hex);
+                Trace("BEACON_NATIVE_METADATA", "timestamp=%02X%02X native_fnv1a32=%08X native_bytes=128 advertised_native_bytes=%zu native_hex=%s",
+                      unsigned(BeaconTimestamp[0]), unsigned(BeaconTimestamp[1]), hash,
+                      NintendoGameInfoLength(BeaconData), hex);
             }
         }
         else if (packet[8] == 7 && length > 16 && length <= 16 + MaxRadioPacket)
