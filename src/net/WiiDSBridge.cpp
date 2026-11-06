@@ -22,11 +22,15 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <io.h>
+#include <windows.h>
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #endif
 
 namespace melonDS::WiiDSBridge
@@ -56,6 +60,117 @@ void CloseSocket(Socket s) { close(s); }
 std::mutex Mutex;
 std::atomic<bool> AnyDiagnostics{false};
 u64 NextContextID = 0;
+struct DiagnosticSink
+{
+    std::FILE* File = nullptr;
+    std::array<char, 64 * 1024> StdioBuffer{};
+    std::array<char, 256 * 1024> Pending{};
+    size_t PendingBytes = 0;
+    u64 KnownBytes = 0, LastFlushMS = 0, DroppedRecords = 0;
+    bool Broken = false, Full = false;
+
+    explicit DiagnosticSink(u64 now) : LastFlushMS(now)
+    {
+        File = std::fopen("wii-ds-bridge.log", "ab");
+        if (!File) { Broken = true; return; }
+        if (std::setvbuf(File, StdioBuffer.data(), _IOFBF, StdioBuffer.size()) != 0 ||
+            std::fseek(File, 0, SEEK_END) != 0)
+        { Broken = true; Close(); return; }
+        const auto size = std::ftell(File);
+        if (size < 0) { Broken = true; Close(); return; }
+        KnownBytes = static_cast<u64>(size);
+        if (KnownBytes >= static_cast<u64>(MaxDiagnosticBytes)) Full = true;
+    }
+    ~DiagnosticSink() { Close(); }
+
+    bool Lock(bool wait)
+    {
+#ifdef _WIN32
+        OVERLAPPED position{};
+        const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(File)));
+        if (handle == INVALID_HANDLE_VALUE) { Broken = true; return false; }
+        if (LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY),
+                       0, MAXDWORD, MAXDWORD, &position)) return true;
+        if (GetLastError() != ERROR_LOCK_VIOLATION && GetLastError() != ERROR_IO_PENDING) Broken = true;
+#else
+        if (flock(fileno(File), LOCK_EX | (wait ? 0 : LOCK_NB)) == 0) return true;
+        if (errno != EWOULDBLOCK && errno != EAGAIN) Broken = true;
+#endif
+        return false;
+    }
+    void Unlock()
+    {
+#ifdef _WIN32
+        OVERLAPPED position{};
+        UnlockFileEx(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(File))), 0,
+                     MAXDWORD, MAXDWORD, &position);
+#else
+        flock(fileno(File), LOCK_UN);
+#endif
+    }
+    bool Size(u64& size)
+    {
+#ifdef _WIN32
+        LARGE_INTEGER value{};
+        if (!GetFileSizeEx(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(File))), &value) || value.QuadPart < 0)
+            return false;
+        size = static_cast<u64>(value.QuadPart);
+#else
+        struct stat value{};
+        if (fstat(fileno(File), &value) != 0 || value.st_size < 0) return false;
+        size = static_cast<u64>(value.st_size);
+#endif
+        return true;
+    }
+    void Flush(u64 now, bool force = false, bool wait = false)
+    {
+        if (!File || Broken || !PendingBytes) return;
+        if (!force && now >= LastFlushMS && now - LastFlushMS < 1000) return;
+        LastFlushMS = now; // A busy/erroring sink cannot turn a silent poll into an I/O loop.
+        if (!Lock(wait)) return;
+        u64 size = 0;
+        if (!Size(size)) { Broken = true; Unlock(); return; }
+        const auto remaining = size < static_cast<u64>(MaxDiagnosticBytes)
+            ? static_cast<size_t>(MaxDiagnosticBytes - size) : 0;
+        size_t count = std::min(PendingBytes, remaining);
+        if (count < PendingBytes)
+        {
+            while (count && Pending[count - 1] != '\n') --count;
+            Full = true; // Keep only whole bounded records at the shared file cap.
+        }
+        if (count)
+        {
+            const auto written = std::fwrite(Pending.data(), 1, count, File);
+            if (written != count || std::fflush(File) != 0) Broken = true;
+            KnownBytes = size + written;
+        }
+        else KnownBytes = size;
+        PendingBytes = 0;
+        if (KnownBytes >= static_cast<u64>(MaxDiagnosticBytes)) Full = true;
+        Unlock();
+    }
+    void Append(const char* data, size_t length, u64 now)
+    {
+        if (!File || Broken || Full) return;
+        Flush(now);
+        if (Broken || Full) return;
+        if (KnownBytes + PendingBytes + length > static_cast<u64>(MaxDiagnosticBytes))
+        {
+            Flush(now, true);
+            if (KnownBytes + length > static_cast<u64>(MaxDiagnosticBytes)) { Full = true; return; }
+        }
+        if (PendingBytes + length > Pending.size()) { ++DroppedRecords; return; }
+        std::memcpy(Pending.data() + PendingBytes, data, length);
+        PendingBytes += length;
+    }
+    void Close()
+    {
+        if (!File) return;
+        Flush(Platform::GetMSCount(), true, true);
+        std::fclose(File);
+        File = nullptr;
+    }
+};
 struct QueuedFrame
 {
     std::vector<u8> Data;
@@ -65,11 +180,12 @@ struct QueuedFrame
 struct Context
 {
 explicit Context(void* owner) : Owner(owner), ContextID(++NextContextID) {}
-~Context() { if (Listener != InvalidSocket) CloseSocket(Listener); }
+~Context() { CloseDiagnostic(); if (Listener != InvalidSocket) CloseSocket(Listener); }
 void* Owner;
 u64 ContextID;
 bool Diagnostics = false;
 bool DiagnosticFileFull = false;
+std::unique_ptr<DiagnosticSink> DiagnosticFile;
 u64 DiagnosticEvent = 0;
 std::array<u64, 3> FrameTraceCount{};
 u64 DropTraceCount = 0;
@@ -105,20 +221,38 @@ std::unordered_map<u32, bool> KnownRounds;
 void WriteDiagnostic(const char* event, unsigned value, const char* detail = "")
 {
     if (!Diagnostics || DiagnosticFileFull) return;
-    if (std::FILE* file = std::fopen("wii-ds-bridge.log", "a"))
-    {
-        if (std::fseek(file, 0, SEEK_END) != 0 || std::ftell(file) >= MaxDiagnosticBytes)
-        { DiagnosticFileFull = true; std::fclose(file); return; }
-        std::fprintf(file, "WII_DS us=%llu event=%s value=%u generation=%llu port=%u instance=%llu trace=%llu mono_ms=%llu selected=%u associated=%u aid=%u channel=%u radio_q=%zu host_q=%zu round=%u %s\n",
+    const auto now = Platform::GetMSCount();
+    if (!DiagnosticFile) DiagnosticFile = std::make_unique<DiagnosticSink>(now);
+    if (DiagnosticFile->Broken || DiagnosticFile->Full) { DiagnosticFileFull = true; return; }
+    char record[1536];
+    const int length = std::snprintf(record, sizeof(record), "WII_DS us=%llu event=%s value=%u generation=%llu port=%u instance=%llu trace=%llu mono_ms=%llu selected=%u associated=%u aid=%u channel=%u radio_q=%zu host_q=%zu round=%u diag_dropped=%llu %s\n",
                      static_cast<unsigned long long>(Platform::GetUSCount()), event,
                      value, static_cast<unsigned long long>(SessionGeneration), BoundPort,
                      static_cast<unsigned long long>(ContextID),
                      static_cast<unsigned long long>(++DiagnosticEvent),
-                     static_cast<unsigned long long>(Platform::GetMSCount()),
+                     static_cast<unsigned long long>(now),
                      unsigned(Selected), unsigned(Associated), unsigned(ExpectedAID), unsigned(Channel),
-                     RadioFrames.size(), HostFrames.size(), CurrentRound, detail);
-        std::fclose(file);
+                     RadioFrames.size(), HostFrames.size(), CurrentRound,
+                     static_cast<unsigned long long>(DiagnosticFile->DroppedRecords), detail);
+    if (length > 0)
+    {
+        const auto count = std::min<size_t>(static_cast<size_t>(length), sizeof(record) - 1);
+        record[count - 1] = '\n';
+        DiagnosticFile->Append(record, count, now);
     }
+    DiagnosticFileFull = DiagnosticFile->Broken || DiagnosticFile->Full;
+}
+void FlushDiagnostic()
+{
+    if (!DiagnosticFile) return;
+    DiagnosticFile->Flush(Platform::GetMSCount());
+    DiagnosticFileFull = DiagnosticFile->Broken || DiagnosticFile->Full;
+}
+void CloseDiagnostic()
+{
+    if (!DiagnosticFile) return;
+    DiagnosticFile->Close();
+    DiagnosticFile.reset();
 }
 void Trace(const char* event, const char* format, ...)
 {
@@ -374,6 +508,7 @@ void QueueRoundAck(u32 round, u16 failure)
 }
 void Pump()
 {
+    FlushDiagnostic();
     EnsureSocket();
     if (Listener == InvalidSocket) return;
     auto now = Platform::GetMSCount();
@@ -454,8 +589,21 @@ void Pump()
             RadioFrames.erase(std::remove_if(RadioFrames.begin(), RadioFrames.end(), [](const auto& p) {
                 return p.size() > 12 && p[12] == 0x80;
             }), RadioFrames.end());
+            const bool metadataChanged = Diagnostics && (!HaveBeacon || std::memcmp(BeaconData.data(), body + 2, 128));
             std::memcpy(BeaconTimestamp.data(), body, 2); std::memcpy(BeaconData.data(), body + 2, 128);
             HaveBeacon = true; LastBeacon = 0; Log("BEACON_CONFIG");
+            if (metadataChanged)
+            {
+                char hex[257];
+                u32 hash = 2166136261u;
+                for (size_t i = 0; i < BeaconData.size(); ++i)
+                {
+                    hash = (hash ^ BeaconData[i]) * 16777619u;
+                    std::snprintf(hex + 2 * i, sizeof(hex) - 2 * i, "%02X", unsigned(BeaconData[i]));
+                }
+                Trace("BEACON_NATIVE_METADATA", "timestamp=%02X%02X native_fnv1a32=%08X native_bytes=128 native_hex=%s",
+                      unsigned(BeaconTimestamp[0]), unsigned(BeaconTimestamp[1]), hash, hex);
+            }
         }
         else if (packet[8] == 7 && length > 16 && length <= 16 + MaxRadioPacket)
         {
@@ -540,6 +688,7 @@ bool Configure(void* instance, bool enabled, bool diagnostics)
     auto& context = *entry;
     if (context.Automatic) context.ClearRadio(false);
     const bool newlyEnabled = diagnostics && !context.Diagnostics;
+    if (context.Diagnostics && !diagnostics) context.CloseDiagnostic();
     context.Diagnostics = diagnostics; context.Automatic = false; context.Selected = false;
     context.HostDisconnectPending = false;
     if (newlyEnabled) { context.DiagnosticFileFull = false; context.Log("DIAGNOSTICS_ENABLED"); }
@@ -557,6 +706,7 @@ bool ConfigureAutomatic(void* instance, bool enabled, bool diagnostics)
     if (!context.Automatic)
     { context.ClearRadio(false); context.HostDisconnectPending = false; }
     const bool newlyEnabled = diagnostics && !context.Diagnostics;
+    if (context.Diagnostics && !diagnostics) context.CloseDiagnostic();
     context.Diagnostics = diagnostics; context.Automatic = true;
     if (newlyEnabled) { context.DiagnosticFileFull = false; context.Log("DIAGNOSTICS_ENABLED"); }
     RefreshDiagnostics();
@@ -838,4 +988,21 @@ void Context::NotifyAID(u16 aid, u8 channel)
     { HostFrames.clear(); KnownRounds.clear(); CurrentRound = 0; Associated = false; CommandAllowed = true; RoundClients = RoundReplies = 0; ++SessionGeneration; }
     Log("GUEST_AID", acceptedAID);
 }
+#ifdef WII_DS_DIAGNOSTIC_TESTING
+// Test-only seams: absent from emulator builds and never affect the protocol.
+void FlushDiagnosticsForTest()
+{
+    std::lock_guard<std::mutex> lock(Mutex);
+    for (auto& entry : Contexts)
+        if (entry.second->DiagnosticFile)
+            entry.second->DiagnosticFile->Flush(Platform::GetMSCount(), true, true);
+}
+void EmitDiagnosticsForTest(void* instance, unsigned count)
+{
+    std::lock_guard<std::mutex> lock(Mutex);
+    if (auto* context = Find(instance))
+        for (unsigned i = 0; i < count; ++i)
+            context->Trace("DIAGNOSTIC_WRITER_FIXTURE", "record=%u synthetic_metadata_only=1", i);
+}
+#endif
 }
