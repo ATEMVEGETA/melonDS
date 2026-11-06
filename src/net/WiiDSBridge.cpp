@@ -8,6 +8,9 @@
 #include "WiiDSMPConfig.h"
 #include "Platform.h"
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -51,6 +54,8 @@ constexpr Socket InvalidSocket = -1;
 void CloseSocket(Socket s) { close(s); }
 #endif
 std::mutex Mutex;
+std::atomic<bool> AnyDiagnostics{false};
+u64 NextContextID = 0;
 struct QueuedFrame
 {
     std::vector<u8> Data;
@@ -59,10 +64,18 @@ struct QueuedFrame
 };
 struct Context
 {
-explicit Context(void* owner) : Owner(owner) {}
+explicit Context(void* owner) : Owner(owner), ContextID(++NextContextID) {}
 ~Context() { if (Listener != InvalidSocket) CloseSocket(Listener); }
 void* Owner;
+u64 ContextID;
 bool Diagnostics = false;
+bool DiagnosticFileFull = false;
+u64 DiagnosticEvent = 0;
+std::array<u64, 3> FrameTraceCount{};
+u64 DropTraceCount = 0;
+u32 ObservedHeaderHash = 0, ObservedEntryHash = 0;
+struct WifiTraceState { u64 Count = 0, LastMS = 0; };
+std::array<WifiTraceState, static_cast<size_t>(WifiDiagnosticEvent::Count)> WifiTrace{};
 bool Automatic = false, Selected = false;
 bool HostDisconnectPending = false;
 Socket Listener = InvalidSocket;
@@ -89,6 +102,64 @@ std::deque<QueuedFrame> HostFrames;
 // The bool prevents duplicate ACK datagrams from completing a round twice.
 std::unordered_map<u32, bool> KnownRounds;
 
+void WriteDiagnostic(const char* event, unsigned value, const char* detail = "")
+{
+    if (!Diagnostics || DiagnosticFileFull) return;
+    if (std::FILE* file = std::fopen("wii-ds-bridge.log", "a"))
+    {
+        if (std::fseek(file, 0, SEEK_END) != 0 || std::ftell(file) >= MaxDiagnosticBytes)
+        { DiagnosticFileFull = true; std::fclose(file); return; }
+        std::fprintf(file, "WII_DS us=%llu event=%s value=%u generation=%llu port=%u instance=%llu trace=%llu mono_ms=%llu selected=%u associated=%u aid=%u channel=%u radio_q=%zu host_q=%zu round=%u %s\n",
+                     static_cast<unsigned long long>(Platform::GetUSCount()), event,
+                     value, static_cast<unsigned long long>(SessionGeneration), BoundPort,
+                     static_cast<unsigned long long>(ContextID),
+                     static_cast<unsigned long long>(++DiagnosticEvent),
+                     static_cast<unsigned long long>(Platform::GetMSCount()),
+                     unsigned(Selected), unsigned(Associated), unsigned(ExpectedAID), unsigned(Channel),
+                     RadioFrames.size(), HostFrames.size(), CurrentRound, detail);
+        std::fclose(file);
+    }
+}
+void Trace(const char* event, const char* format, ...)
+{
+    if (!Diagnostics || DiagnosticFileFull) return;
+    char detail[512];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(detail, sizeof(detail), format, args);
+    va_end(args);
+    WriteDiagnostic(event, 0, detail);
+}
+void TraceDrop(const char* event, unsigned value = 0)
+{
+    if (!Diagnostics) return;
+    if (++DropTraceCount > 32 && (DropTraceCount & 63)) return;
+    WriteDiagnostic(event, value, "drop/rejection; sampled after first32");
+}
+void TraceFrame(const char* event, const u8* radio, size_t length, u32 round, unsigned stream)
+{
+    if (!Diagnostics || !radio || length < 12 + 24 || stream >= FrameTraceCount.size()) return;
+    const auto count = ++FrameTraceCount[stream];
+    // Keep initial handshakes complete without unbounded packet-file traffic.
+    if (count > 512 && (count & 63)) return;
+    const auto* frame = radio + 12;
+    const unsigned control = unsigned(frame[0]) | (unsigned(frame[1]) << 8);
+    const unsigned sequence = (unsigned(frame[22]) | (unsigned(frame[23]) << 8)) >> 4;
+    size_t nativeOffset = 24;
+    if ((control & 0x00fc) == 0x28 || (control & 0x00fc) == 0x18 || (control & 0x00fc) == 0x58)
+        nativeOffset += 4;
+    const auto available = length - 12;
+    const size_t headLength = nativeOffset < available ? std::min<size_t>(8, available - nativeOffset) : 0;
+    char head[17]{};
+    for (size_t i = 0; i < headLength; ++i)
+        std::snprintf(head + 2 * i, sizeof(head) - 2 * i, "%02X", unsigned(frame[nativeOffset + i]));
+    Trace(event,
+          "frame_count=%llu packet_round=%u length=%zu fc=%04X type=%u subtype=%u seq=%u rx_channel=%u dst=%02X:%02X:%02X:%02X:%02X:%02X src=%02X:%02X:%02X:%02X:%02X:%02X bssid=%02X:%02X:%02X:%02X:%02X:%02X native_header=%s header_bytes=%zu",
+          static_cast<unsigned long long>(count), round, length, control, (control >> 2) & 3, (control >> 4) & 15,
+          sequence, unsigned(radio[9]), frame[4], frame[5], frame[6], frame[7], frame[8], frame[9],
+          frame[10], frame[11], frame[12], frame[13], frame[14], frame[15],
+          frame[16], frame[17], frame[18], frame[19], frame[20], frame[21], head, headLength);
+}
 void Log(const char* event, unsigned value = 0)
 {
     if (!Diagnostics) return;
@@ -98,18 +169,12 @@ void Log(const char* event, unsigned value = 0)
         !std::strcmp(event, "RADIO_FRAME_DELIVERED") ||
         !std::strcmp(event, "MP_ACK_FAILURE_MASK");
     if (hotEvent && ++HotCount > 16 && (HotCount & 255)) return;
-    if (std::FILE* file = std::fopen("wii-ds-bridge.log", "a"))
-    {
-        if (std::fseek(file, 0, SEEK_END) != 0 || std::ftell(file) >= MaxDiagnosticBytes)
-        { std::fclose(file); return; }
-        std::fprintf(file, "WII_DS us=%llu event=%s value=%u generation=%llu port=%u\n",
-                     static_cast<unsigned long long>(Platform::GetUSCount()), event,
-                     value, static_cast<unsigned long long>(SessionGeneration), BoundPort);
-        std::fclose(file);
-    }
+    WriteDiagnostic(event, value);
 }
 void ClearRadio(bool clearBeacon)
 {
+    Trace("RADIO_CLEAR", "clear_beacon=%u expected_channel=%u known_rounds=%zu", unsigned(clearBeacon),
+          unsigned(ExpectedChannel), KnownRounds.size());
     if (Automatic) Selected = false;
     RadioFrames.clear(); HostFrames.clear();
     KnownRounds.clear(); CurrentRound = 0; MultiRound = false;
@@ -126,9 +191,23 @@ void ClearRadio(bool clearBeacon)
         RadioSequence = 1; BeaconSequence = CommandSequence = 0; DTIM = 0;
     }
     LastBeacon = 0;
+    // Diagnostic histories are per radio generation, not guest state.
+    if (Diagnostics)
+    {
+        FrameTraceCount.fill(0); DropTraceCount = 0;
+        ObservedHeaderHash = ObservedEntryHash = 0;
+        WifiTrace.fill({});
+    }
 }
 void ClearPeer(const char* reason)
 {
+    if (Diagnostics)
+    {
+        const auto now = Platform::GetMSCount();
+        Trace("PEER_CLEAR", "reason=%s peer_age_ms=%llu have_peer=%u have_beacon=%u", reason,
+              static_cast<unsigned long long>(LastHello && now >= LastHello ? now - LastHello : 0),
+              unsigned(HavePeer), unsigned(HaveBeacon));
+    }
     const bool lostSelectedHost = Automatic && Selected;
     ClearRadio(true); HavePeer = false; Peer = {}; LastHello = 0;
     // Keep this until the core observes host loss, even if another HELLO
@@ -195,8 +274,18 @@ int SendEnvelope(u8 type, const u8* body, size_t size)
     std::copy(Magic.begin(), Magic.end(), packet.begin());
     packet[8] = type; packet[9] = static_cast<u8>(size >> 8); packet[10] = static_cast<u8>(size);
     if (size) std::memcpy(packet.data() + 11, body, size);
-    return sendto(Listener, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
-                  reinterpret_cast<const sockaddr*>(&Peer), sizeof(Peer));
+    const int sent = sendto(Listener, reinterpret_cast<const char*>(packet.data()), static_cast<int>(packet.size()), 0,
+                            reinterpret_cast<const sockaddr*>(&Peer), sizeof(Peer));
+    if (Diagnostics && sent != static_cast<int>(packet.size()))
+    {
+#ifdef _WIN32
+        const int error = WSAGetLastError();
+#else
+        const int error = errno;
+#endif
+        Trace("UDP_SEND_FAILED", "envelope_type=%u expected=%zu actual=%d socket_error=%d", unsigned(type), packet.size(), sent, error);
+    }
+    return sent;
 }
 void QueueBeacon(u8 channel)
 {
@@ -239,8 +328,8 @@ std::vector<u8> MakeAck(u16 failure = 0)
 }
 void QueueCommand(const u8* application, size_t length, const WiiDSMPSettings& config, u32 round = 0)
 {
-    if (length < 1 || 12 + 24 + 4 + length + 4 > MaxRadioPacket) return;
-    if (round && KnownRounds.count(round)) return;
+    if (length < 1 || 12 + 24 + 4 + length + 4 > MaxRadioPacket) { TraceDrop("DROP_COMMAND_LENGTH", static_cast<unsigned>(length)); return; }
+    if (round && KnownRounds.count(round)) { TraceDrop("DROP_DUPLICATE_ROUND", round); return; }
     if (round) MultiRound = true;
     if (HostFrames.size() + 2 > MaxQueuedPackets)
     {
@@ -261,6 +350,7 @@ void QueueCommand(const u8* application, size_t length, const WiiDSMPSettings& c
     std::memcpy(frame + 28, application, length);
     // IOS swaps the application buffer's first halfword onto the radio.
     if (length >= 2) std::swap(frame[28], frame[29]);
+    TraceFrame("COMMAND_HEADER_QUEUED", radio.data(), radio.size(), round, 1);
     HostFrames.push_back({std::move(radio), round, false});
     if (round) KnownRounds.emplace(round, false);
     else HostFrames.push_back({MakeAck(), 0, true});
@@ -269,7 +359,7 @@ void QueueCommand(const u8* application, size_t length, const WiiDSMPSettings& c
 void QueueRoundAck(u32 round, u16 failure)
 {
     const auto known = KnownRounds.find(round);
-    if (!round || known == KnownRounds.end() || known->second) return;
+    if (!round || known == KnownRounds.end() || known->second) { TraceDrop("DROP_UNKNOWN_OR_DUPLICATE_ACK", round); return; }
     if (HostFrames.size() >= MaxQueuedPackets) { ClearPeer("QUEUE_OVERFLOW"); return; }
     const auto command = std::find_if(HostFrames.begin(), HostFrames.end(), [round](const auto& queued) {
         return queued.Round == round && !queued.Ack;
@@ -298,7 +388,21 @@ void Pump()
 #endif
         const int received = recvfrom(Listener, reinterpret_cast<char*>(packet.data()), static_cast<int>(packet.size()), 0,
                                       reinterpret_cast<sockaddr*>(&sender), &size);
-        if (received <= 0) break;
+        if (received <= 0)
+        {
+            if (Diagnostics && received < 0)
+            {
+#ifdef _WIN32
+                const int error = WSAGetLastError();
+                const bool noData = error == WSAEWOULDBLOCK;
+#else
+                const int error = errno;
+                const bool noData = error == EWOULDBLOCK || error == EAGAIN;
+#endif
+                if (!noData) TraceDrop("UDP_RECV_FAILED", unsigned(error));
+            }
+            break;
+        }
         if (sender.sin_family != AF_INET || sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) continue;
         if (received == static_cast<int>(sizeof(Hello)-1) && !std::memcmp(packet.data(), Hello, sizeof(Hello)-1))
         {
@@ -310,9 +414,12 @@ void Pump()
             sendto(Listener, response, length, 0, reinterpret_cast<const sockaddr*>(&sender), size);
             continue;
         }
-        if (!SamePeer(sender) || received < 11 || std::memcmp(packet.data(), Magic.data(), Magic.size())) continue;
+        if (!SamePeer(sender)) { TraceDrop("DROP_FOREIGN_PEER", unsigned(received)); continue; }
+        if (received < 11 || std::memcmp(packet.data(), Magic.data(), Magic.size()))
+        { TraceDrop("DROP_ENVELOPE_HEADER", unsigned(received)); continue; }
         const size_t length = (u16(packet[9]) << 8) | packet[10];
-        if (static_cast<size_t>(received) != 11 + length) continue;
+        if (static_cast<size_t>(received) != 11 + length)
+        { TraceDrop("DROP_ENVELOPE_LENGTH", unsigned(length)); continue; }
         const auto* body = packet.data() + 11;
         if (packet[8] == 8 && length == 0) { ClearPeer("PEER_STOP"); continue; }
         if ((packet[8] == 2 && length == 130 && !HaveParentIdentity) ||
@@ -383,8 +490,10 @@ void Pump()
             { Log("FOREIGN_PARENT_MANAGEMENT"); continue; }
             if (RadioFrames.size() >= MaxQueuedPackets) { ClearPeer("QUEUE_OVERFLOW"); continue; }
             RadioFrames.emplace_front(body, body + length);
+            TraceFrame("MANAGEMENT_HEADER_QUEUED", body, length, 0, 1);
             Log("MANAGEMENT_QUEUED", body[12]);
         }
+        else TraceDrop("DROP_UNSUPPORTED_ENVELOPE", packet[8]);
         // Legacy type4 guessing and synthetic replies intentionally are unsupported.
     }
     if (HavePeer && HaveBeacon && (LastBeacon == 0 || now - LastBeacon >= 200))
@@ -407,6 +516,12 @@ Context* Find(void* instance)
     const auto found = Contexts.find(instance);
     return found == Contexts.end() ? nullptr : found->second.get();
 }
+void RefreshDiagnostics()
+{
+    AnyDiagnostics.store(std::any_of(Contexts.begin(), Contexts.end(), [](const auto& entry) {
+        return entry.second->Diagnostics;
+    }), std::memory_order_relaxed);
+}
 }
 
 bool Configure(void* instance, bool enabled, bool diagnostics)
@@ -417,14 +532,18 @@ bool Configure(void* instance, bool enabled, bool diagnostics)
     {
         if (auto* context = Find(instance)) context->ClearPeer("DISABLED");
         Contexts.erase(instance);
+        RefreshDiagnostics();
         return true;
     }
     auto& entry = Contexts[instance];
     if (!entry) entry = std::make_unique<Context>(instance);
     auto& context = *entry;
     if (context.Automatic) context.ClearRadio(false);
+    const bool newlyEnabled = diagnostics && !context.Diagnostics;
     context.Diagnostics = diagnostics; context.Automatic = false; context.Selected = false;
     context.HostDisconnectPending = false;
+    if (newlyEnabled) { context.DiagnosticFileFull = false; context.Log("DIAGNOSTICS_ENABLED"); }
+    RefreshDiagnostics();
     return true;
 }
 bool ConfigureAutomatic(void* instance, bool enabled, bool diagnostics)
@@ -437,7 +556,10 @@ bool ConfigureAutomatic(void* instance, bool enabled, bool diagnostics)
     auto& context = *entry;
     if (!context.Automatic)
     { context.ClearRadio(false); context.HostDisconnectPending = false; }
+    const bool newlyEnabled = diagnostics && !context.Diagnostics;
     context.Diagnostics = diagnostics; context.Automatic = true;
+    if (newlyEnabled) { context.DiagnosticFileFull = false; context.Log("DIAGNOSTICS_ENABLED"); }
+    RefreshDiagnostics();
     return true;
 }
 void Release(void* instance) { Configure(instance, false, false); }
@@ -498,6 +620,65 @@ bool Context::ConsumeHostDisconnect()
 }
 void Process(void* instance) { std::lock_guard<std::mutex> lock(Mutex); if (auto* c = Find(instance)) c->Pump(); }
 void ResetRadio(void* instance) { std::lock_guard<std::mutex> lock(Mutex); if (auto* c = Find(instance)) { c->ClearRadio(false); c->HostDisconnectPending = false; c->Log("RADIO_RESET"); } }
+bool DiagnosticsEnabled() { return AnyDiagnostics.load(std::memory_order_relaxed); }
+void ObserveARM9Jump(void* instance, u32 address, const u8* ramHeader)
+{
+    if (!DiagnosticsEnabled() || !ramHeader) return;
+    const auto read32 = [ramHeader](size_t offset) {
+        return u32(ramHeader[offset]) | (u32(ramHeader[offset + 1]) << 8) |
+               (u32(ramHeader[offset + 2]) << 16) | (u32(ramHeader[offset + 3]) << 24);
+    };
+    // Reject ordinary branches with one header-word read, before locks/hash.
+    // This hook is not a per-instruction logger and is not exhaustive in JIT.
+    const u32 entry = read32(0x24);
+    if ((address & ~1u) != (entry & ~1u)) return;
+    const u32 load = read32(0x28), size = read32(0x2c);
+    if (load < 0x02000000 || size == 0 || u64(load) + size > 0x02400000 ||
+        (entry & ~1u) < load || (entry & ~1u) >= u64(load) + size) return;
+    std::lock_guard<std::mutex> lock(Mutex);
+    auto* context = Find(instance);
+    if (!context || !context->Diagnostics) return;
+    u32 hash = 2166136261u;
+    for (size_t i = 0; i < 0x40; ++i) hash = (hash ^ ramHeader[i]) * 16777619u;
+    if (hash != context->ObservedHeaderHash)
+    {
+        context->ObservedHeaderHash = hash;
+        context->Trace("RAM_BOOT_HEADER_OBSERVED", "header_hash=%08X arm9_entry=%08X arm9_load=%08X arm9_size=%u arm7_entry=%08X arm7_load=%08X arm7_size=%u note=header_presence_is_not_transfer_completion",
+                       hash, entry, load, size, read32(0x34), read32(0x38), read32(0x3c));
+    }
+    if ((address & ~1u) == (entry & ~1u) && context->ObservedEntryHash != hash)
+    {
+        context->ObservedEntryHash = hash;
+        context->Trace("RAM_ENTRY_JUMP_OBSERVED", "pc=%08X header_hash=%08X arm9_size=%u note=observed_ARM9_jump_only_not_application_connection_success", address, hash, size);
+    }
+}
+void TraceWifiEvent(void* instance, WifiDiagnosticEvent event, u32 value0, u32 value1,
+                   u32 value2, u32 value3, const u8* radio, u32 radioLength)
+{
+    if (!DiagnosticsEnabled()) return;
+    std::lock_guard<std::mutex> lock(Mutex);
+    auto* context = Find(instance);
+    const auto index = static_cast<size_t>(event);
+    if (!context || !context->Diagnostics || context->DiagnosticFileFull || index >= context->WifiTrace.size()) return;
+    constexpr const char* names[] = {
+        "CORE_WAIT_MP_READY", "CORE_WAIT_POWER", "CORE_WAIT_RX_ENABLED", "CORE_WAIT_RX_RING",
+        "CORE_DROP_SHORT_FRAME", "CORE_DROP_FRAME_LENGTH", "CORE_DROP_CHANNEL", "CORE_DROP_NOT_MP",
+        "CORE_HOST_LOST", "CORE_DEAUTHENTICATED", "CORE_RX_REJECTED", "CORE_RX_COMMITTED", "CORE_RX_RING_FULL"
+    };
+    auto& state = context->WifiTrace[index];
+    const auto count = ++state.Count;
+    const auto now = Platform::GetMSCount();
+    const bool quietGate = index <= static_cast<size_t>(WifiDiagnosticEvent::WaitRXRing);
+    // Silent polling can be 1500Hz: at most one file record/second/reason.
+    // Do not log every differing cursor/counter value as a state change.
+    if (quietGate && count > 1 && now >= state.LastMS && now - state.LastMS < 1000) return;
+    if (!quietGate && count > 512 && (count & 63)) return;
+    state.LastMS = now;
+    context->Trace(names[index], "event_count=%llu v0=%08X v1=%08X v2=%08X v3=%08X",
+                   static_cast<unsigned long long>(count), value0, value1, value2, value3);
+    if (radio && radioLength >= 12 + 24 && radioLength <= MaxRadioPacket)
+        context->TraceFrame("CORE_RX_HEADER", radio, radioLength, context->CurrentRound, 2);
+}
 u64 Generation(void* instance) { std::lock_guard<std::mutex> lock(Mutex); auto* c = Find(instance); return c ? c->SessionGeneration : 0; }
 unsigned IdentitySlot(void* instance)
 {
@@ -524,15 +705,16 @@ int Send(void* instance, const u8* data, int length)
 }
 int Context::SendPacket(const u8* data, int length)
 {
-    if ((Automatic && !Selected) || !data || length < 12 + 24 || static_cast<size_t>(length) > MaxRadioPacket) return 0;
+    if ((Automatic && !Selected) || !data || length < 12 + 24 || static_cast<size_t>(length) > MaxRadioPacket)
+    { TraceDrop("DROP_TX_NOT_SELECTED_OR_LENGTH", unsigned(length)); return 0; }
     Pump();
-    if (!HavePeer || (Automatic && !Selected)) return 0;
+    if (!HavePeer || (Automatic && !Selected)) { TraceDrop("DROP_TX_NO_PEER", unsigned(length)); return 0; }
     const auto* frame = data + 12;
     const bool reply = Associated && HaveClientMAC && data[9] == Channel && length >= 12 + 24 + 4 &&
         (frame[0] == 0x18 || frame[0] == 0x58) && (frame[1] & 3) == 1 &&
         !std::memcmp(frame + 4, ParentMAC.data(), 6) && !std::memcmp(frame + 10, ClientMAC.data(), 6) &&
         !std::memcmp(frame + 16, ReplyMAC, 6) && ExpectedAID > 0 && ExpectedAID < 16;
-    if (reply && MultiRound && !CurrentRound) return 0;
+    if (reply && MultiRound && !CurrentRound) { TraceDrop("DROP_REPLY_WITHOUT_ROUND", unsigned(length)); return 0; }
     if (reply && CurrentRound)
     {
         std::vector<u8> body(4 + length);
@@ -552,6 +734,7 @@ int Context::SendPacket(const u8* data, int length)
     }
     if (reply)
         RoundReplies |= u16(1u << ExpectedAID) & RoundClients;
+    TraceFrame("DS_HEADER_TRANSMITTED", data, static_cast<size_t>(length), reply ? CurrentRound : 0, 0);
     Log("DS_FRAME_SENT", length);
     return length;
 }
@@ -566,15 +749,21 @@ int Context::ReceivePacket(u8* data, u64* timestamp, bool host)
     if (!data || !timestamp) return 0;
     Pump();
     if (host && Automatic && !Selected) return 0;
-    if (host && (HostFrames.empty() || !Associated)) return 0;
+    if (host && (HostFrames.empty() || !Associated))
+    {
+        if (!HostFrames.empty() && !Associated) TraceDrop("HOST_DELIVERY_WAIT_ASSOCIATION", unsigned(HostFrames.size()));
+        return 0;
+    }
     if (!host && RadioFrames.empty()) return 0;
     std::vector<u8> packet;
     u32 round = 0;
     if (host)
     {
         const auto& next = HostFrames.front();
-        if (!next.Ack && (!CommandAllowed || CurrentRound)) return 0;
-        if (next.Ack && next.Round && CurrentRound != next.Round) return 0;
+        if (!next.Ack && (!CommandAllowed || CurrentRound))
+        { TraceDrop("HOST_DELIVERY_WAIT_COMMAND_GATE", next.Round); return 0; }
+        if (next.Ack && next.Round && CurrentRound != next.Round)
+        { TraceDrop("HOST_DELIVERY_WAIT_ACK_ROUND", next.Round); return 0; }
         round = next.Round;
         if (round)
         {
@@ -604,6 +793,7 @@ int Context::ReceivePacket(u8* data, u64* timestamp, bool host)
     *timestamp = host || Associated ? 0 : Platform::GetUSCount();
     if (!host && packet.size() >= 12 + 36 && packet[12] == 0x80 && packet[13] == 0)
         SendEnvelope(6, nullptr, 0);
+    TraceFrame(host ? "HOST_HEADER_DELIVERED" : "RADIO_HEADER_DELIVERED", packet.data(), packet.size(), round, 2);
     Log(host ? "HOST_FRAME_DELIVERED" : "RADIO_FRAME_DELIVERED", static_cast<unsigned>(packet.size()));
     return static_cast<int>(packet.size());
 }
@@ -636,7 +826,11 @@ void Context::NotifyAID(u16 aid, u8 channel)
     // The guest self-tests AID registers with nonzero patterns at boot. A
     // write establishes association only after a matching real response.
     if (associated && (!ExpectedAID || acceptedAID != ExpectedAID || channel != ExpectedChannel))
+    {
+        if (Diagnostics)
+            Trace("GUEST_AID_REJECTED", "observed_aid=%u observed_channel=%u expected_aid=%u expected_channel=%u", unsigned(acceptedAID), unsigned(channel), unsigned(ExpectedAID), unsigned(ExpectedChannel));
         return;
+    }
     if (associated == Associated) return;
     if (associated)
     { Channel = channel; for (auto& p : HostFrames) p.Data[9] = channel; Associated = true; }

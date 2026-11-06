@@ -33,6 +33,7 @@
 #include "Wifi.h"
 #include "AREngine.h"
 #include "Platform.h"
+#include "net/WiiDSBridge.h"
 #include "FreeBIOS.h"
 #include "Args.h"
 #include "version.h"
@@ -1587,6 +1588,12 @@ void NDS::NocashPrint(u32 ncpu, u32 addr, bool appendNewline)
 
 void NDS::MonitorARM9Jump(u32 addr)
 {
+    // Diagnostics observe a real jump to the RAM header's entry point. They
+    // do not launch a client, certify a download, or alter guest execution.
+    // The disabled path is one relaxed atomic check, without locks/RAM reads.
+    if (WiiDSBridge::DiagnosticsEnabled())
+        WiiDSBridge::ObserveARM9Jump(UserData, addr, MainRAM + (0x027FFE00 & MainRAMMask));
+
     // checkme: can the entrypoint addr be THUMB?
     // also TODO: make it work in DSi mode
 

@@ -28,6 +28,19 @@ bool IsWiiFrame(void* instance, const u8* data, int length);
 bool ConsumeHostDisconnect(void* instance);
 void Process(void* instance);
 void ResetRadio(void* instance);
+// Opt-in observation only: never changes guest RAM, execution or radio state.
+bool DiagnosticsEnabled();
+void ObserveARM9Jump(void* instance, u32 address, const u8* ramHeader);
+enum class WifiDiagnosticEvent : u8
+{
+    WaitMPReady, WaitPower, WaitRXEnabled, WaitRXRing,
+    DropShortFrame, DropFrameLength, DropChannel, DropNotMP,
+    HostLost, Deauthenticated, ReceiveRejected, ReceiveCommitted, RingFull,
+    Count
+};
+void TraceWifiEvent(void* instance, WifiDiagnosticEvent event, u32 value0 = 0,
+                   u32 value1 = 0, u32 value2 = 0, u32 value3 = 0,
+                   const u8* radio = nullptr, u32 radioLength = 0);
 u64 Generation(void* instance);
 // A context retains its exclusively bound radio port for its lifetime. The
 // slot also distinguishes guest MACs across separately launched processes.

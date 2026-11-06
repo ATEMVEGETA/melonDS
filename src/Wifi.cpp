@@ -1282,6 +1282,18 @@ void Wifi::FinishRX()
     u16 framectl = *(u16*)&RXBuffer[12];
     u16 seqno = *(u16*)&RXBuffer[12 + 22];
 
+    // Diagnostics only. Rejection reasons: 1=destination, 2=WEP disabled,
+    // 3=foreign beacon, 4=foreign management, 5=foreign PS-poll, 6=control type,
+    // 7=from/to filter, 8=data BSSID, 9=retransmit, 10=subtype filter,
+    // 11=unsupported subtype, 12=duplicate command. No filter is bypassed.
+    const auto traceRejected = [&](u32 reason) {
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::ReceiveRejected,
+            reason, u32(IOPORT(W_RXFilter)) | (u32(IOPORT(W_RXFilter2)) << 16),
+            u32(IOPORT(W_BSSID0)) | (u32(IOPORT(W_BSSID1)) << 16),
+            u32(IOPORT(W_BSSID2)) | (u32(IOPORT(W_AIDFull)) << 16),
+            RXBuffer, 12 + std::min<u32>(sizeof(RXBuffer) - 12, *(u16*)&RXBuffer[8]));
+    };
+
     // check the frame's destination address
     // note: the hardware always checks the first address field, regardless of the frame type/etc
     // similarly, the second address field is used to send acks to non-broadcast frames
@@ -1290,7 +1302,7 @@ void Wifi::FinishRX()
     if (!(dstmac[0] & 0x01))
     {
         if (!MACEqual(dstmac, (u8*)&IOPORT(W_MACAddr0)))
-            return;
+        { traceRejected(1); return; }
     }
 
     // reject the frame if it's a WEP frame and WEP is off
@@ -1299,7 +1311,7 @@ void Wifi::FinishRX()
     if (framectl & (1<<14))
     {
         if (!(IOPORT(W_WEPCnt) & (1<<15)))
-            return;
+        { traceRejected(2); return; }
     }
 
     // apply RX filtering
@@ -1325,7 +1337,7 @@ void Wifi::FinishRX()
                 if (!(rxflags & 0x8000))
                 {
                     if (!(IOPORT(W_RXFilter) & (1<<0)))
-                        return;
+                    { traceRejected(3); return; }
                 }
 
                 rxflags |= 0x0001;
@@ -1337,7 +1349,7 @@ void Wifi::FinishRX()
                 {
                     // CHECKME!
                     if (!(IOPORT(W_RXFilter) & (3<<9)))
-                        return;
+                    { traceRejected(4); return; }
                 }
             }
         }
@@ -1354,13 +1366,13 @@ void Wifi::FinishRX()
                 if (!(rxflags & 0x8000))
                 {
                     if (!(IOPORT(W_RXFilter) & (1<<11)))
-                        return;
+                    { traceRejected(5); return; }
                 }
 
                 rxflags |= 0x0005;
             }
             else
-                return;
+            { traceRejected(6); return; }
         }
         break;
 
@@ -1368,7 +1380,7 @@ void Wifi::FinishRX()
         {
             u16 fromto = (framectl >> 8) & 0x3;
             if (IOPORT(W_RXFilter2) & (1<<fromto))
-                return;
+            { traceRejected(7); return; }
 
             int bssidoffset[4] = {16, 4, 10, 0};
             if (bssidoffset[fromto])
@@ -1383,13 +1395,13 @@ void Wifi::FinishRX()
             if (!(rxflags & 0x8000))
             {
                 if (!(rxfilter & (1<<11)))
-                    return;
+                { traceRejected(8); return; }
             }
 
             if (framectl & (1<<11)) // retransmit
             {
                 if (!(rxfilter & (1<<0)))
-                    return;
+                { traceRejected(9); return; }
             }
 
             // check for MP frames
@@ -1432,23 +1444,23 @@ void Wifi::FinishRX()
             case 0x1:
                 if ((rxflags & 0xF) == 0xD)
                 {
-                    if (!(rxfilter & (1<<7))) return;
+                    if (!(rxfilter & (1<<7))) { traceRejected(10); return; }
                 }
                 else if ((rxflags & 0xF) != 0xE)
                 {
-                    if (!(rxfilter & (1<<1))) return;
+                    if (!(rxfilter & (1<<1))) { traceRejected(10); return; }
                 }
                 break;
 
             case 0x2:
                 if ((rxflags & 0xF) != 0xC)
                 {
-                    if (!(rxfilter & (1<<2))) return;
+                    if (!(rxfilter & (1<<2))) { traceRejected(10); return; }
                 }
                 break;
 
             case 0x3:
-                if (!(rxfilter & (1<<3))) return;
+                if (!(rxfilter & (1<<3))) { traceRejected(10); return; }
                 break;
 
             case 0x4: break;
@@ -1456,24 +1468,24 @@ void Wifi::FinishRX()
             case 0x5:
                 if ((rxflags & 0xF) == 0xF)
                 {
-                    if (!(rxfilter & (1<<8))) return;
+                    if (!(rxfilter & (1<<8))) { traceRejected(10); return; }
                 }
                 else
                 {
-                    if (!(rxfilter & (1<<4))) return;
+                    if (!(rxfilter & (1<<4))) { traceRejected(10); return; }
                 }
                 break;
 
             case 0x6:
-                if (!(rxfilter & (1<<5))) return;
+                if (!(rxfilter & (1<<5))) { traceRejected(10); return; }
                 break;
 
             case 0x7:
-                if (!(rxfilter & (1<<6))) return;
+                if (!(rxfilter & (1<<6))) { traceRejected(10); return; }
                 break;
 
             default:
-                return;
+            { traceRejected(11); return; }
             }
         }
         break;
@@ -1515,7 +1527,11 @@ void Wifi::FinishRX()
         }
 
         SetIRQ(0);
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::ReceiveCommitted,
+            framectl, rxflags, IOPORT(W_RXBufWriteCursor), IOPORT(W_RXBufReadCursor),
+            RXBuffer, 12 + std::min<u32>(sizeof(RXBuffer) - 12, *(u16*)&RXBuffer[8]));
     }
+    else traceRejected(12);
 
     if ((rxflags & 0x800F) == 0x800C)
     {
@@ -1614,19 +1630,35 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
             if (WiiDSBridge::IsActive(NDS.UserData) && !WiiDSMPStarted)
             {
                 if (!IOPORT(W_AIDLow) || !((IOPORT(W_TXSlotReply1) | IOPORT(W_TXSlotReply2)) & 0x8000))
+                {
+                    WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::WaitMPReady,
+                        IOPORT(W_AIDLow), IOPORT(W_TXSlotReply1), IOPORT(W_TXSlotReply2), IOPORT(W_TXBusy));
                     return false;
+                }
                 WiiDSMPStarted = true;
             }
         }
     }
     if (IOPORT(W_PowerState) & (1<<9))
+    {
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::WaitPower,
+            IOPORT(W_PowerState), type, IOPORT(W_RXCnt), CurChannel);
         return false;
+    }
 
     if (!(IOPORT(W_RXCnt) & 0x8000))
+    {
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::WaitRXEnabled,
+            IOPORT(W_RXCnt), type, IOPORT(W_PowerState), CurChannel);
         return false;
+    }
 
     if (IOPORT(W_RXBufBegin) == IOPORT(W_RXBufEnd))
+    {
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::WaitRXRing,
+            IOPORT(W_RXBufBegin), IOPORT(W_RXBufEnd), type, CurChannel);
         return false;
+    }
 
     int rxlen;
     int framelen;
@@ -1649,6 +1681,8 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
             rxlen = Platform::MP_RecvHostPacket(RXBuffer, &timestamp, NDS.UserData);
             if (rxlen < 0)
             {
+                WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::HostLost,
+                    type, CurChannel, IOPORT(W_AIDFull), IOPORT(W_RXCnt));
                 // host is gone
                 // TODO: make this more resilient
                 IsMP = false;
@@ -1657,11 +1691,18 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
         }
 
         if (rxlen <= 0) return false;
-        if (rxlen < 12+24) continue;
+        if (rxlen < 12+24)
+        {
+            WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::DropShortFrame,
+                u32(rxlen), type, CurChannel);
+            continue;
+        }
 
         framelen = *(u16*)&RXBuffer[10];
         if (framelen != rxlen-12)
         {
+            WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::DropFrameLength,
+                u32(framelen), u32(rxlen - 12), type, CurChannel);
             Log(LogLevel::Error, "bad frame length %d/%d\n", framelen, rxlen-12);
             continue;
         }
@@ -1669,6 +1710,8 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
         chan = RXBuffer[9];
         if (chan != CurChannel || CurChannel == 0)
         {
+            WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::DropChannel,
+                chan, CurChannel, type, u32(framelen), RXBuffer, u32(rxlen));
             Log(LogLevel::Debug, "received frame but bad channel %d (expected %d)\n", chan, CurChannel);
             continue;
         }
@@ -1680,6 +1723,8 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
                 MACEqual(&RXBuffer[12 + 4], MPCmdMAC) ||
                 MACEqual(&RXBuffer[12 + 4], MPReplyMAC))
             {
+                WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::DropNotMP,
+                    u32(type), unsigned(IsMP), unsigned(IsMPClient), u32(framelen), RXBuffer, u32(rxlen));
                 continue;
             }
         }
@@ -1744,6 +1789,9 @@ bool Wifi::CheckRX(int type) // 0=regular 1=MP replies 2=MP host frames
     }
     else if ((frametype == 0x00C0) && timestamp && macgood && IsMPClient)
     {
+        WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::Deauthenticated,
+            framelen >= 26 ? u32(*(u16*)&RXBuffer[12 + 24]) : 0,
+            CurChannel, IOPORT(W_AIDFull), u32(framelen), RXBuffer, u32(rxlen));
         if (WiiDSBridge::IsEnabled(NDS.UserData)) WiiDSRound.Reset();
         IsMP = false;
         IsMPClient = false;
@@ -1979,6 +2027,9 @@ void Wifi::USTimer(u32 param)
                        IOPORT(W_RXTXAddr), IOPORT(W_PowerState), ComStatus,
                        IOPORT(W_RXCnt), IOPORT(W_RXFilter), IOPORT(W_RXFilter2),
                        *(u16*)&RXBuffer[0], *(u16*)&RXBuffer[12], *(u16*)&RXBuffer[8]);
+                WiiDSBridge::TraceWifiEvent(NDS.UserData, WiiDSBridge::WifiDiagnosticEvent::RingFull,
+                    IOPORT(W_RXBufBegin), IOPORT(W_RXBufEnd), IOPORT(W_RXBufReadCursor), IOPORT(W_RXBufWriteCursor),
+                    RXBuffer, 12 + std::min<u32>(sizeof(RXBuffer) - 12, *(u16*)&RXBuffer[8]));
                 RXTime = 0;
                 SetStatus(1);
                 if (TXCurSlot == 0xFFFFFFFF)
