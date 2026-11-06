@@ -42,5 +42,7 @@ diagnostics use bounded buffering; they remain off by default.
 
 Battle Revolution Mystery Gift receipt/repeat was confirmed on beta.3; Ranch
 and four-player Battle Revolution results are historical beta.1 coverage, not
-fresh complete retail reruns for beta.4. The separate beta.3-macos.1 tester
-packages do not include this Driver fix and are not Mac gameplay certification.
+fresh complete retail reruns for beta.4. The separate beta.4-macos.1 tester
+packages include this Driver fix and passed native automated checks, but are
+not Mac gameplay certification. Their build records identify the exact source
+pins independently of later documentation-only commits.
