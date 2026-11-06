@@ -54,6 +54,14 @@ legacy fixed-address beacon, but use a matching updated pair for this fix.
 An updated Dolphin will not advertise an inconsistent address to an old
 melonDS that cannot represent its configured parent identity.
 
+Version-1 Nintendo GameInfo records are advertised at their declared size:
+16 bytes of fixed fields plus the declared user-data length, up to 128 bytes.
+The bridge no longer pads a short application advertisement to the larger
+multiboot record size. This matters when the downloaded client starts and
+searches again for its parent. Unknown or malformed formats retain the bounded
+legacy fallback. This is a generic encoder correction, not a game-ID workaround;
+Driver: San Francisco (PAL) connectivity was confirmed with the beta.4 fix.
+
 It is not internet play, physical Wi-Fi, a real-console bridge, or a claim of
 universal Wii–DS compatibility. Native Download Play code is transferred by
 the running Wii game and executed by the DS guest from RAM; the original
@@ -61,10 +69,12 @@ inserted cartridge and save remain attached. No cached client ROM, synthetic
 game response, or title-specific CPU patch is supplied.
 
 Optional Wii–DS diagnostic logging is off by default. If enabled, scalar
-transport events are appended to `wii-ds-bridge.log` in the working directory.
-The log contains no game payload, Pokémon data, or RAM dumps. High-frequency
-records are sampled after the first 16 events and logging stops at 8 MiB.
-Delete the log as needed after troubleshooting.
+transport events and radio metadata are appended to `wii-ds-bridge.log` in the
+working directory. The log contains no application payload, Pokémon data,
+saves or RAM dumps. High-frequency records are sampled after the first 16
+events and logging stops at 8 MiB. The writer uses bounded buffering to avoid
+reopening and synchronously writing the file for every event. Delete the log
+as needed after troubleshooting; review it for private paths before sharing.
 
 Developer launch overrides `--wii-ds` (forced Wii backend) and `--no-wii-ds`
 (off) take priority over saved settings for that launch. The normal menu
@@ -77,6 +87,9 @@ one-player disconnect/rejoin while the others stayed connected, and a normal
 Ranch transfer/save/shutdown regression. Automated transport checks exercised
 eight DS contexts and separate processes. Eight-player retail gameplay and
 every other Wii-DS title have not been established by these tests.
+Beta.3 added a confirmed Battle Revolution Mystery Gift receipt/repeat result.
+Beta.4 adds Driver PAL Download Play connectivity; the complete earlier
+Pokémon retail flows were not freshly rerun for this beacon-length fix.
 Games, BIOS, firmware, NAND, saves, and captured game payloads are not included.
 
 ## Local Windows build
